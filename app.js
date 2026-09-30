@@ -41,7 +41,13 @@ function toast(msg, err) {
   const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast', 3200);
 }
-function fail(e) { console.error(e); toast('حصل خطأ: ' + (e && e.message ? e.message : e), true); }
+function fail(e) {
+  console.error(e);
+  let m = e && e.message ? e.message : String(e);
+  if (e && e.code === '23505') m = 'الاسم ده موجود بالفعل';
+  else if (e && e.code === '23503') m = 'مينفعش، عليه بيانات مرتبطة';
+  toast('حصل خطأ: ' + m, true);
+}
 async function guard(btn, fn) {
   if (btn) btn.disabled = true;
   try { await fn(); } catch (e) { fail(e); } finally { if (btn) btn.disabled = false; }
@@ -106,6 +112,46 @@ async function fetchAlerts() {
   return { stores: a.data, wh: b.data };
 }
 
+/* ---------------- أيقونات ومساعدات ---------------- */
+const ICONS = {
+  receive: '<path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  dist: '<path d="M1 6h13v10H1z"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+  visit: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8"/><path d="M10 20v-5h4v5"/>',
+  alerts: '<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/>',
+  stock: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  report: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/>',
+  manage: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  sales: '<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
+  refresh: '<path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/>'
+};
+const icon = (n, s) => `<svg class="ico" width="${s || 24}" height="${s || 24}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
+
+// قفل الجلسة: بعد 5 دقايق من ترك التطبيق أو الخمول يطلب كلمة السر من جديد
+const IDLE_MS = 5 * 60 * 1000;
+function touch() { try { localStorage.setItem('hm_last', String(Date.now())); } catch (e) { } }
+function idleExpired() { let t = 0; try { t = +localStorage.getItem('hm_last') || 0; } catch (e) { } return !t || Date.now() - t > IDLE_MS; }
+
+// نافذة إدخال بسيطة (تعديل الأسماء)
+function modal(opts) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div'); ov.className = 'ov no-print';
+    ov.innerHTML = `<div class="mdl"><h3>${esc(opts.title)}</h3>` +
+      opts.fields.map((f, i) => `<label class="lbl">${esc(f.label)}</label><input type="text" id="mf${i}" value="${esc(f.value || '')}">`).join('') +
+      `<div class="mact"><button class="btn primary" id="mok">${esc(opts.ok || 'حفظ')}</button><button class="btn" id="mno">إلغاء</button></div></div>`;
+    document.body.appendChild(ov);
+    const close = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#mok').onclick = () => close(opts.fields.map((f, i) => ov.querySelector('#mf' + i).value.trim()));
+    ov.querySelector('#mno').onclick = () => close(null);
+    ov.addEventListener('click', e => { if (e.target === ov) close(null); });
+    ov.querySelector('#mf0').focus();
+  });
+}
+async function countUse(table, col, id) {
+  const { count, error } = await sb.from(table).select('id', { count: 'exact', head: true }).eq(col, id);
+  if (error) throw error; return count || 0;
+}
+function niceMax(m) { const p = Math.pow(10, Math.floor(Math.log10(m))); const f = m / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+
 /* ---------------- الهيكل العام ---------------- */
 function page(title, body) {
   const home = !location.hash || location.hash === '#/home' || location.hash === '#/';
@@ -114,9 +160,9 @@ function page(title, body) {
       <div class="ttl">${esc(title)}</div>
       <button class="ghost" id="logout">خروج</button>
     </header>
-    <div class="datebar no-print"><span>تاريخ العمل: <b>${fmtDate(S.date)}</b></span><a href="#/home">تغيير</a></div>
+    ${home ? '' : `<div class="datebar no-print"><span>تاريخ العمل: <b>${fmtDate(S.date)}</b></span><a href="#/home">تغيير</a></div>`}
     <main class="page">${body}</main>`;
-  on('logout', 'click', async () => { await sb.auth.signOut(); });
+  on('logout', 'click', async () => { await sb.auth.signOut({ scope: 'local' }); });
 }
 
 /* ---------------- تسجيل الدخول ---------------- */
@@ -177,40 +223,118 @@ function viewNoAccess() {
   app.innerHTML = `<div class="login"><div class="card"><h3>حسابك غير مفعّل</h3>
     <p class="muted">تم تسجيل الدخول، لكن الحساب ده لسه مش مضاف لموقع التقارير. اطلب من المسؤول إضافته.</p>
     <button class="btn" id="lo">تسجيل خروج</button></div></div>`;
-  on('lo', 'click', () => sb.auth.signOut());
+  on('lo', 'click', () => sb.auth.signOut({ scope: 'local' }));
 }
 async function afterLogin() {
+  touch();
   const { data, error } = await sb.from('hm_users').select('*').eq('user_id', S.user.id).maybeSingle();
   if (error) throw error;
   S.profile = data || null;
   if (S.profile) await loadLookups();
 }
 
-/* ---------------- الرئيسية ---------------- */
+/* ---------------- الرئيسية: داش بورد مباشر ---------------- */
+let homeTimer = null;
 async function viewHome() {
-  const tile = (r, ic, t, extra) => `<a class="tile" href="#/${r}"><span class="ic">${ic}</span>${t}${extra || ''}</a>`;
+  const tile = (r, ic, t, sub) => `<a class="tile2" href="#/${r}"><span class="tico">${icon(ic, 26)}</span><span class="ttxt"><b>${t}</b><small>${sub}</small></span></a>`;
+  if (!S.range) S.range = 30;
   page('أفق - تقارير المناديب', `
+    <div class="livebar"><span class="dot"></span><span>مباشر</span><span id="upd"></span>
+      <button class="rbtn" id="rfr" aria-label="تحديث">${icon('refresh', 18)}</button></div>
+    <div class="dateline"><label for="wd">تاريخ العمل</label><input type="date" id="wd" value="${S.date}"></div>
+    <div class="kpis">
+      <a class="kpi" href="#/stock"><span class="kic">${icon('stock', 22)}</span><b class="kv" id="k1v">–</b><span class="kl">مخزوني (بوكس)</span><small class="ks" id="k1s">&nbsp;</small></a>
+      <a class="kpi" href="#/report"><span class="kic green">${icon('sales', 22)}</span><b class="kv" id="k2v">–</b><span class="kl">مبيع اليوم (بوكس)</span><small class="ks" id="k2s">&nbsp;</small></a>
+      <a class="kpi" id="k3" href="#/alerts"><span class="kic red">${icon('alerts', 22)}</span><b class="kv" id="k3v">–</b><span class="kl">تنبيهات الصلاحية</span><small class="ks" id="k3s">&nbsp;</small></a>
+    </div>
     <section class="card">
-      <label class="lbl">تاريخ العمل (السجلات والتقارير بتمشي بيه)</label>
-      <input type="date" id="wd" value="${S.date}">
-      <div class="muted" style="margin-top:6px">أهلًا ${esc(S.profile.name)}</div>
+      <div class="chead"><h3>المبيع اليومي (بوكس)</h3>
+        <div class="seg" id="seg"><button data-r="7" class="${S.range === 7 ? 'on' : ''}">7 أيام</button><button data-r="30" class="${S.range === 30 ? 'on' : ''}">30 يوم</button></div></div>
+      <div class="ctip" id="ctip">&nbsp;</div>
+      <div id="chart" class="chart"></div>
     </section>
-    <div class="tiles">
-      ${tile('receive', '📦', 'استلام من المصنع')}
-      ${tile('dist', '🚚', 'توزيع')}
-      ${tile('visit', '🏪', 'زيارة')}
-      ${tile('alerts', '⏰', 'تنبيهات', '<b id="ab" class="nb"></b>')}
-      ${tile('stock', '📊', 'المخزون')}
-      ${tile('report', '📄', 'تقرير نهائي')}
-      ${tile('manage', '⚙️', 'المنتجات والمحلات')}
+    <section class="card" id="nearcard" style="display:none">
+      <div class="chead"><h3>أقرب انتهاء صلاحية</h3><a href="#/alerts" class="lnk">عرض الكل</a></div><div id="near"></div>
+    </section>
+    <div class="tiles2">
+      ${tile('receive', 'receive', 'استلام من المصنع', 'تسجيل الوارد بالبوكس')}
+      ${tile('dist', 'dist', 'توزيع', 'على المحلات')}
+      ${tile('visit', 'visit', 'زيارة', 'جرد المحل والمبيع')}
+      ${tile('alerts', 'alerts', 'تنبيهات', 'قرب انتهاء الصلاحية')}
+      ${tile('stock', 'stock', 'المخزون', 'الكميات والتواريخ')}
+      ${tile('report', 'report', 'تقرير نهائي', 'PDF بتصميم الشركة')}
+      ${tile('manage', 'manage', 'المنتجات والمحلات', 'إضافة وتعديل ومسح')}
     </div>
     <div style="margin-top:14px">${installBlock()}</div>`);
   bindInstall();
+
+  let cache = null, picked = S.date;
+  const tip = (d, v) => { const el = $('ctip'); if (el) el.innerHTML = `<b>${fmtDate(d)}</b> — ${num(v)} بوكس`; };
+  const drawChart = () => {
+    const box = $('chart'); if (!box || !cache) return;
+    const n = S.range, days = [];
+    for (let i = n - 1; i >= 0; i--) days.push(addDays(S.date, -i));
+    const vals = days.map(d => cache.daily[d] || 0);
+    const top = niceMax(Math.max(...vals, 1));
+    const W = 340, H = 160, pl = 26, pr = 6, pt = 10, pb = 22, bw = (W - pl - pr) / n, ph = H - pt - pb;
+    let g = '', bars = '', lab = '';
+    [0, 0.5, 1].forEach(f => {
+      const y = H - pb - f * ph;
+      g += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}"/><text x="${pl - 4}" y="${y + 3}" text-anchor="end">${num(top * f)}</text>`;
+    });
+    days.forEach((d, i) => {
+      const h = vals[i] / top * ph, x = pl + i * bw, y = H - pb - h, sel = d === picked;
+      bars += `<g class="bar${sel ? ' sel' : ''}" data-d="${d}" data-v="${vals[i]}"><rect x="${x}" y="${pt}" width="${bw}" height="${ph}" fill="transparent"/><rect x="${x + bw * 0.17}" y="${y}" width="${bw * 0.66}" height="${vals[i] > 0 ? Math.max(h, 2) : 0}" rx="${Math.min(4, bw * 0.3)}"/></g>`;
+      const step = n <= 7 ? 1 : 6;
+      if ((n - 1 - i) % step === 0) lab += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${d.slice(8)}/${d.slice(5, 7)}</text>`;
+    });
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="المبيع اليومي">${g}${bars}${lab}</svg>`;
+    tip(picked, cache.daily[picked] || 0);
+  };
+  const paint = () => {
+    if (!cache || !$('k1v')) return;
+    const c = cache;
+    $('k1v').textContent = num(c.whBoxes); $('k1s').textContent = 'في المحلات: ' + num(c.stBoxes);
+    let month = 0; Object.keys(c.daily).forEach(d => { if (d >= c.monthStart) month += c.daily[d]; });
+    $('k2v').textContent = num(c.daily[S.date] || 0); $('k2s').textContent = 'الشهر: ' + num(month);
+    const all = c.al.stores.map(r => Object.assign({ where: storeName(r.store_id) }, r)).concat(c.al.wh.map(r => Object.assign({ where: 'مخزون عندي' }, r)));
+    const red = all.filter(r => daysLeft(r.expiry_date) <= C.DANGER_DAYS).length;
+    $('k3v').textContent = all.length;
+    $('k3s').textContent = all.length ? red + ' عاجل · ' + (all.length - red) + ' قريب' : 'كله تمام ✅';
+    $('k3').classList.toggle('bad', red > 0);
+    all.sort((a, b) => a.expiry_date.localeCompare(b.expiry_date));
+    $('nearcard').style.display = all.length ? 'block' : 'none';
+    $('near').innerHTML = all.slice(0, 3).map(r => `<a class="nr" href="#/alerts"><div>${brandBadge(brandOfProd(r.product_id))} <b>${esc(prodName(r.product_id))}</b><div class="muted">${esc(r.where)} · ${fmtDate(r.expiry_date)}</div></div>${expChip(r.expiry_date)}</a>`).join('');
+    $('upd').textContent = 'آخر تحديث ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    drawChart();
+  };
+  const load = async () => {
+    const monthStart = S.date.slice(0, 8) + '01', back = addDays(S.date, -29);
+    const from = monthStart < back ? monthStart : back;
+    const [wh, st, al, vs] = await Promise.all([
+      sb.from('hm_stock').select('available').gt('available', 0),
+      sb.from('hm_store_stock').select('current_boxes').gt('current_boxes', 0),
+      fetchAlerts(),
+      sb.from('hm_visits').select('visit_date, hm_visit_items(sold_boxes)').gte('visit_date', from).lte('visit_date', S.date)
+    ]);
+    for (const r of [wh, st, vs]) if (r.error) throw r.error;
+    const sum = (a, f) => a.reduce((x, r) => x + Number(r[f]), 0), daily = {};
+    vs.data.forEach(v => { daily[v.visit_date] = (daily[v.visit_date] || 0) + v.hm_visit_items.reduce((a, i) => a + Number(i.sold_boxes), 0); });
+    cache = { whBoxes: sum(wh.data, 'available'), stBoxes: sum(st.data, 'current_boxes'), al, daily, monthStart };
+    paint();
+  };
+
+  on('rfr', 'click', () => guard($('rfr'), load));
   on('wd', 'change', e => { if (e.target.value) { S.date = e.target.value; localStorage.setItem('hm_date', S.date); viewHome(); } });
-  fetchAlerts().then(a => {
-    const n = a.stores.length + a.wh.length, el = $('ab');
-    if (el && n) { el.textContent = n; el.style.display = 'inline-block'; }
-  }).catch(() => { });
+  $('seg').onclick = e => { const b = e.target.closest('[data-r]'); if (!b) return; S.range = +b.dataset.r; $('seg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawChart(); };
+  $('chart').onclick = e => {
+    const g = e.target.closest('.bar'); if (!g) return;
+    picked = g.dataset.d; $('chart').querySelectorAll('.bar').forEach(x => x.classList.toggle('sel', x === g)); tip(picked, +g.dataset.v);
+  };
+  S.refreshHome = () => load().catch(() => { });
+  clearInterval(homeTimer);
+  homeTimer = setInterval(() => { if (document.visibilityState === 'visible' && $('k1v')) S.refreshHome(); }, 60000);
+  load().catch(fail);
 }
 
 /* ---------------- الاستلام من المصنع ---------------- */
@@ -574,21 +698,24 @@ async function viewManage() {
       <label class="lbl">البراند</label><select id="mb">${S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>
       <label class="lbl">اسم المنتج</label><input type="text" id="mn">
       <button class="btn primary" id="madd">إضافة</button></section>
-      <section class="card"><h3>المنتجات (${S.products.length})</h3>${S.products.map(p => `<div class="row"><div>${brandBadge(S.brandBy[p.brand_id])} ${esc(p.name)}${p.active ? '' : ' <span class="muted">(موقوف)</span>'}</div><button class="btn small" data-tp="${p.id}">${p.active ? 'إيقاف' : 'تفعيل'}</button></div>`).join('') || '<div class="muted">لا توجد منتجات</div>'}</section>`;
+      <section class="card"><h3>المنتجات (${S.products.length})</h3>${S.products.map(p => `<div class="row ${p.active ? '' : 'dim'}"><div>${brandBadge(S.brandBy[p.brand_id])} ${esc(p.name)}${p.active ? '' : ' <span class="muted">(موقوف)</span>'}</div>
+        <div class="acts"><button class="btn small" data-ep="${p.id}">تعديل</button><button class="btn small" data-tp="${p.id}">${p.active ? 'إيقاف' : 'تفعيل'}</button><button class="btn small danger" data-dp="${p.id}">مسح</button></div></div>`).join('') || '<div class="muted">لا توجد منتجات</div>'}</section>`;
   } else if (manageTab === 'stores') {
     body = `<section class="card"><h3>إضافة محل</h3>
       <label class="lbl">اسم المحل</label><input type="text" id="sn">
       <div class="grid2"><div><label class="lbl">الفرع</label><input type="text" id="sbr"></div><div><label class="lbl">المدينة</label><input type="text" id="sc"></div></div>
       <button class="btn primary" id="sadd">إضافة</button></section>
-      <section class="card"><h3>المحلات (${S.stores.length})</h3>${S.stores.map(s => `<div class="row"><div><a href="#/store/${s.id}">${esc(s.name + (s.branch ? ' - ' + s.branch : ''))}</a>${s.active ? '' : ' <span class="muted">(موقوف)</span>'}</div><button class="btn small" data-ts="${s.id}">${s.active ? 'إيقاف' : 'تفعيل'}</button></div>`).join('') || '<div class="muted">لا توجد محلات</div>'}</section>`;
+      <section class="card"><h3>المحلات (${S.stores.length})</h3>${S.stores.map(s => `<div class="row ${s.active ? '' : 'dim'}"><div><a href="#/store/${s.id}">${esc(s.name + (s.branch ? ' - ' + s.branch : ''))}</a>${s.active ? '' : ' <span class="muted">(موقوف)</span>'}</div>
+        <div class="acts"><button class="btn small" data-es="${s.id}">تعديل</button><button class="btn small" data-ts="${s.id}">${s.active ? 'إيقاف' : 'تفعيل'}</button><button class="btn small danger" data-ds="${s.id}">مسح</button></div></div>`).join('') || '<div class="muted">لا توجد محلات</div>'}</section>`;
   } else {
-    body = `<section class="card"><h3>شعارات البراندات</h3><div class="muted">الشعار بيظهر في التنبيهات والتقارير.</div>
-      ${S.brands.map(b => `<div class="row"><div>${brandBadge(b)} ${esc(b.name)}</div><label class="btn small" style="cursor:pointer">رفع شعار<input type="file" accept="image/*" data-bl="${b.id}" style="display:none"></label></div>`).join('')}</section>
+    body = `<section class="card"><h3>البراندات وشعاراتها</h3><div class="muted">الشعار بيظهر في التنبيهات والتقارير.</div>
+      ${S.brands.map(b => `<div class="row"><div>${brandBadge(b)} ${esc(b.name)}</div><div class="acts"><button class="btn small" data-eb="${b.id}">تعديل الاسم</button><label class="btn small" style="cursor:pointer">رفع شعار<input type="file" accept="image/*" data-bl="${b.id}" style="display:none"></label></div></div>`).join('')}</section>
       <section class="card"><h3>إضافة براند</h3><input type="text" id="bn" placeholder="اسم البراند"><button class="btn primary" id="badd">إضافة</button></section>`;
   }
   page('المنتجات والمحلات', `<div class="tabs">${tabs.map(t => `<button data-tab="${t[0]}" class="${manageTab === t[0] ? 'on' : ''}">${t[1]}</button>`).join('')}</div>${body}`);
   document.querySelector('.tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { manageTab = b.dataset.tab; viewManage(); } };
   const refresh = async () => { await loadLookups(); viewManage(); };
+
   on('madd', 'click', () => guard($('madd'), async () => {
     const name = val('mn').trim(); if (!name) return toast('اكتب اسم المنتج', true);
     const { error } = await sb.from('hm_products').insert({ brand_id: +val('mb'), name }); if (error) throw error; toast('تمت الإضافة'); await refresh();
@@ -601,12 +728,61 @@ async function viewManage() {
     const name = val('bn').trim(); if (!name) return toast('اكتب اسم البراند', true);
     const { error } = await sb.from('hm_brands').insert({ name }); if (error) throw error; toast('تمت الإضافة'); await refresh();
   }));
+
+  // ----- تعديل -----
+  document.querySelectorAll('[data-ep]').forEach(b => b.onclick = () => guard(b, async () => {
+    const p = S.prodBy[b.dataset.ep];
+    const r = await modal({ title: 'تعديل المنتج', fields: [{ label: 'اسم المنتج', value: p.name }] });
+    if (!r) return; if (!r[0]) return toast('اكتب الاسم', true);
+    const { error } = await sb.from('hm_products').update({ name: r[0] }).eq('id', p.id); if (error) throw error; toast('تم التعديل'); await refresh();
+  }));
+  document.querySelectorAll('[data-es]').forEach(b => b.onclick = () => guard(b, async () => {
+    const s = S.storeBy[b.dataset.es];
+    const r = await modal({ title: 'تعديل المحل', fields: [{ label: 'اسم المحل', value: s.name }, { label: 'الفرع', value: s.branch }, { label: 'المدينة', value: s.city || '' }] });
+    if (!r) return; if (!r[0]) return toast('اكتب اسم المحل', true);
+    const { error } = await sb.from('hm_stores').update({ name: r[0], branch: r[1], city: r[2] || null }).eq('id', s.id); if (error) throw error; toast('تم التعديل'); await refresh();
+  }));
+  document.querySelectorAll('[data-eb]').forEach(b => b.onclick = () => guard(b, async () => {
+    const br = S.brandBy[b.dataset.eb];
+    const r = await modal({ title: 'تعديل اسم البراند', fields: [{ label: 'اسم البراند', value: br.name }] });
+    if (!r) return; if (!r[0]) return toast('اكتب الاسم', true);
+    const { error } = await sb.from('hm_brands').update({ name: r[0] }).eq('id', br.id); if (error) throw error; toast('تم التعديل'); await refresh();
+  }));
+
+  // ----- إيقاف / تفعيل -----
   document.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => guard(b, async () => {
     const p = S.prodBy[b.dataset.tp]; const { error } = await sb.from('hm_products').update({ active: !p.active }).eq('id', p.id); if (error) throw error; await refresh();
   }));
   document.querySelectorAll('[data-ts]').forEach(b => b.onclick = () => guard(b, async () => {
     const s = S.storeBy[b.dataset.ts]; const { error } = await sb.from('hm_stores').update({ active: !s.active }).eq('id', s.id); if (error) throw error; await refresh();
   }));
+
+  // ----- مسح (لو عليه حركة بيتوقف بدل ما يتمسح عشان السجلات القديمة) -----
+  document.querySelectorAll('[data-dp]').forEach(b => b.onclick = () => guard(b, async () => {
+    const p = S.prodBy[b.dataset.dp];
+    const used = (await Promise.all([countUse('hm_receipts', 'product_id', p.id), countUse('hm_distribution_items', 'product_id', p.id), countUse('hm_visit_items', 'product_id', p.id)])).reduce((a, c) => a + c, 0);
+    if (used > 0) {
+      if (!confirm(`المنتج "${p.name}" عليه ${used} حركة مسجلة، فمش هينفع يتمسح نهائي عشان السجلات القديمة.\nتحب نوقفه بدل المسح؟ (مش هيظهر في القوائم الجديدة)`)) return;
+      const { error } = await sb.from('hm_products').update({ active: false }).eq('id', p.id); if (error) throw error; toast('تم إيقاف المنتج');
+    } else {
+      if (!confirm(`مسح "${p.name}" نهائيًا؟`)) return;
+      const { error } = await sb.from('hm_products').delete().eq('id', p.id); if (error) throw error; toast('تم المسح');
+    }
+    await refresh();
+  }));
+  document.querySelectorAll('[data-ds]').forEach(b => b.onclick = () => guard(b, async () => {
+    const s = S.storeBy[b.dataset.ds], nm = s.name + (s.branch ? ' - ' + s.branch : '');
+    const used = (await Promise.all([countUse('hm_distributions', 'store_id', s.id), countUse('hm_visits', 'store_id', s.id)])).reduce((a, c) => a + c, 0);
+    if (used > 0) {
+      if (!confirm(`المحل "${nm}" عليه ${used} حركة (توزيع أو زيارة)، فمش هينفع يتمسح نهائي عشان السجلات القديمة.\nتحب نوقفه بدل المسح؟ (مش هيظهر في القوائم الجديدة)`)) return;
+      const { error } = await sb.from('hm_stores').update({ active: false }).eq('id', s.id); if (error) throw error; toast('تم إيقاف المحل');
+    } else {
+      if (!confirm(`مسح "${nm}" نهائيًا؟`)) return;
+      const { error } = await sb.from('hm_stores').delete().eq('id', s.id); if (error) throw error; toast('تم المسح');
+    }
+    await refresh();
+  }));
+
   document.querySelectorAll('[data-bl]').forEach(inp => inp.onchange = () => guard(null, async () => {
     const f = inp.files[0]; if (!f) return;
     const path = `brands/${inp.dataset.bl}-${Date.now()}.png`;
@@ -623,6 +799,7 @@ async function viewManage() {
 /* ---------------- التوجيه ---------------- */
 const routes = { home: viewHome, receive: viewReceive, dist: viewDist, visit: viewVisit, alerts: viewAlerts, report: viewReport, stock: viewStock, manage: viewManage, store: viewStore };
 async function route() {
+  clearInterval(homeTimer); S.refreshHome = null;
   if (!S.user) return viewLogin();
   if (!S.profile) return viewNoAccess();
   const [name, arg] = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -634,10 +811,25 @@ async function route() {
   try {
     const { data } = await sb.auth.getSession();
     S.user = data.session ? data.session.user : null;
+    // لو مرّ أكثر من 5 دقايق من آخر استخدام: نطلب كلمة السر من جديد
+    if (S.user && idleExpired()) { await sb.auth.signOut({ scope: 'local' }); S.user = null; }
     if (S.user) await afterLogin();
   } catch (e) { fail(e); }
   sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') { S.user = null; S.profile = null; route(); } });
   window.addEventListener('hashchange', route);
+
+  let lastTouch = 0;
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, () => {
+    if (S.user && Date.now() - lastTouch > 5000) { lastTouch = Date.now(); touch(); }
+  }, { passive: true }));
+  setInterval(() => { if (S.user && document.visibilityState === 'visible') touch(); }, 20000);
+  window.addEventListener('pagehide', () => { if (S.user) touch(); });
+  document.addEventListener('visibilitychange', async () => {
+    if (!S.user) return;
+    if (document.visibilityState === 'hidden') { touch(); return; }
+    if (idleExpired()) { await sb.auth.signOut({ scope: 'local' }); return; }
+    touch(); if (S.refreshHome) S.refreshHome();
+  });
   route();
 })();
 
