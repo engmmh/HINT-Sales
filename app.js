@@ -1,3 +1,18 @@
+// إعدادات الاتصال بـ Supabase
+// الـ anon key مخصص للاستخدام داخل المتصفح، والحماية الفعلية من سياسات RLS في قاعدة البيانات.
+// لا تضع هنا مفتاح service_role أبدًا.
+window.HM_CONFIG = {
+  SUPABASE_URL: "https://guorxzejmtvypiwxrogf.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1b3J4emVqbXR2eXBpd3hyb2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk3MzI2NjksImV4cCI6MjEwNTMwODY2OX0.o95p3N83NLU8ZKZG5LtwS95iR1W3eN03qixqjsnWk_8",
+  // الدخول بكلمة سر فقط: الإيميل ثابت ومخفي عن المستخدم (لا يُرسل له أي بريد)
+  LOGIN_EMAIL: "hm@example.com",
+  // Supabase يشترط 6 خانات على الأقل، فبنضيف بادئة ولاحقة على كلمة السر اللي بتكتبها
+  PW_PREFIX: "hm-",
+  PW_SUFFIX: "-ufuq",
+  ALERT_DAYS: 60,      // تنبيه لأي منتج باقي على انتهائه أقل من شهرين
+  DANGER_DAYS: 30      // أحمر لأقل من شهر
+};
+
 (function () {
 'use strict';
 
@@ -105,14 +120,48 @@ function page(title, body) {
 }
 
 /* ---------------- تسجيل الدخول ---------------- */
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  document.querySelectorAll('.inst').forEach(b => b.style.display = 'block');
+  document.querySelectorAll('.inst-hint').forEach(b => b.style.display = 'none');
+});
+window.addEventListener('appinstalled', () => { deferredPrompt = null; document.querySelectorAll('.inst,.inst-hint').forEach(b => b.style.display = 'none'); });
+function installBlock() {
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (standalone) return '';
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const hint = ios
+    ? 'لتثبيت التطبيق: اضغط زر المشاركة <b>⬆︎</b> ثم <b>إضافة إلى الشاشة الرئيسية</b>'
+    : 'لتثبيته على الهاتف: افتح قائمة المتصفح <b>⋮</b> ثم <b>تثبيت التطبيق</b> أو <b>إضافة إلى الشاشة الرئيسية</b>';
+  return `<button class="btn inst" style="display:${deferredPrompt ? 'block' : 'none'}">📲 تثبيت التطبيق على الهاتف</button>
+    <div class="inst-hint" style="display:${deferredPrompt ? 'none' : 'block'}">${hint}</div>`;
+}
+function bindInstall() {
+  document.querySelectorAll('button.inst').forEach(b => b.onclick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null;
+    document.querySelectorAll('.inst').forEach(x => x.style.display = 'none');
+  });
+}
 function viewLogin() {
-  app.innerHTML = `<div class="login">
-    <img src="assets/header.jpg" alt="شركة أفق الحروف التجارية">
-    <div class="card">
-      <h3>تسجيل الدخول</h3>
-      <label class="lbl">كلمة السر</label><input type="password" id="pw" inputmode="numeric" autocomplete="current-password" dir="ltr" autofocus>
-      <button class="btn primary" id="go">دخول</button>
-    </div></div>`;
+  const A = window.HM_ASSETS || {};
+  app.innerHTML = `<div class="loginwrap">
+    <div class="logincard">
+      <img class="llogo" src="${A.logo || ''}" alt="أفق">
+      <div class="lco">شركة أفق الحروف التجارية</div>
+      <div class="lco2">UFUQ AL-HOROUF COMMERCIAL</div>
+      <div class="lsep"></div>
+      <h1 class="lttl">تقارير المناديب</h1>
+      <div class="pwbox">
+        <input type="password" id="pw" inputmode="numeric" autocomplete="current-password" dir="ltr" placeholder="كلمة السر" autofocus>
+        <button type="button" class="eye" id="eye" aria-label="إظهار كلمة السر">👁</button>
+      </div>
+      <button class="btn primary big" id="go">دخول</button>
+      ${installBlock()}
+    </div>
+    <div class="lfoot">OUR BRANDS · M DEE - HINT - MLT - KIB</div>
+  </div>`;
   const submit = () => guard($('go'), async () => {
     const pin = val('pw').trim();
     if (!pin) return toast('اكتب كلمة السر', true);
@@ -121,6 +170,8 @@ function viewLogin() {
     S.user = data.user; await afterLogin(); location.hash = '#/home'; route();
   });
   on('go', 'click', submit); on('pw', 'keydown', e => { if (e.key === 'Enter') submit(); });
+  on('eye', 'click', () => { const i = $('pw'); i.type = i.type === 'password' ? 'text' : 'password'; });
+  bindInstall();
 }
 function viewNoAccess() {
   app.innerHTML = `<div class="login"><div class="card"><h3>حسابك غير مفعّل</h3>
@@ -152,7 +203,9 @@ async function viewHome() {
       ${tile('stock', '📊', 'المخزون')}
       ${tile('report', '📄', 'تقرير نهائي')}
       ${tile('manage', '⚙️', 'المنتجات والمحلات')}
-    </div>`);
+    </div>
+    <div style="margin-top:14px">${installBlock()}</div>`);
+  bindInstall();
   on('wd', 'change', e => { if (e.target.value) { S.date = e.target.value; localStorage.setItem('hm_date', S.date); viewHome(); } });
   fetchAlerts().then(a => {
     const n = a.stores.length + a.wh.length, el = $('ab');
@@ -456,8 +509,8 @@ async function buildReport() {
       <button class="btn primary" id="rprint" style="margin:0">🖨️ طباعة / حفظ PDF</button>
       <button class="btn" id="rwa" style="margin:0">واتساب (ملخص)</button></div>
     <div class="sheet" id="sheet"><table class="frame">
-      <thead><tr><td><img class="lh" src="assets/header.jpg" alt=""></td></tr></thead>
-      <tfoot><tr><td><img class="lh" src="assets/footer.jpg" alt=""></td></tr></tfoot>
+      <thead><tr><td><img class="lh" src="${(window.HM_ASSETS||{}).header || ''}" alt=""></td></tr></thead>
+      <tfoot><tr><td><img class="lh" src="${(window.HM_ASSETS||{}).footer || ''}" alt=""></td></tr></tfoot>
       <tbody><tr><td><div class="body">
         <h1>تقرير يومي عن العمل</h1>
         <div class="meta"><span>التاريخ: <b>${fmtDate(d)}</b></span><span>المندوب: <b>${esc(S.profile.name)}</b></span></div>
