@@ -1111,7 +1111,7 @@ async function viewCollSheet(id) {
         <div class="chips2" id="cpt">${['تحويل', 'شبكة', 'كاش'].map(t => `<button type="button" class="btn small" data-pt="${t}">${t}</button>`).join('')}</div>
         <div class="grid2">
           <div><label class="lbl">رقم الفاتورة</label><input type="text" id="ci"></div>
-          <div><label class="lbl">رقم السند</label><input type="text" id="cv"></div>
+          <div><label class="lbl">رقم السند (تلقائي — عدّله أو اضغط + / −)</label><div class="vstep"><button type="button" class="btn small" id="cvm">−</button><input type="text" inputmode="numeric" id="cv"><button type="button" class="btn small" id="cvp">+</button></div></div>
         </div>
         <label class="lbl">التاريخ</label><input type="date" id="cd">
         <button class="btn primary" id="csave">إضافة السطر</button>
@@ -1137,6 +1137,8 @@ async function viewCollSheet(id) {
       const { error } = await sb.from('hm_collections').update(upd).eq('id', id); if (error) throw error;
       Object.assign(sh, upd); draw(); toast('تم الحفظ');
     }));
+    const stepV = d => { const v = toNum(val('cv')); const n = /^\d+$/.test(String(val('cv')).trim()) || val('cv').trim() === '' ? Math.max(0, (val('cv').trim() === '' ? (+nextVoucher() || 1) - d : v) + d) : null; if (n !== null) $('cv').value = String(n); };
+    on('cvp', 'click', () => stepV(1)); on('cvm', 'click', () => stepV(-1));
     $('cpt').onclick = e => { const b = e.target.closest('[data-pt]'); if (b) $('cp').value = b.dataset.pt; };
     on('ccancel', 'click', () => { resetForm(); paintRows(); });
     on('csave', 'click', () => guard($('csave'), async () => {
