@@ -1,5 +1,5 @@
 // Service worker بسيط: يحمّل أحدث نسخة من الشبكة أولًا، وبيخلي الموقع قابل للتثبيت.
-const CACHE = 'hm-v3';
+const CACHE = 'hm-v4';
 const SHELL = ['./', 'index.html', 'app.js', 'assets.js', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

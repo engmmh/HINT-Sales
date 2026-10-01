@@ -46,7 +46,7 @@ function fail(e) {
   let m = e && e.message ? e.message : String(e);
   if (e && e.code === '23505') m = 'الاسم ده موجود بالفعل';
   else if (e && e.code === '23503') m = 'مينفعش، عليه بيانات مرتبطة';
-  else if (/added_boxes|hm_collection/i.test(m)) m = 'لازم تشغّل ملف الترقية SQL في Supabase الأول';
+  else if (/added_boxes|hm_collection|prod_date|shelf_months/i.test(m)) m = 'لازم تشغّل ملف الترقية SQL في Supabase الأول';
   toast('حصل خطأ: ' + m, true);
 }
 async function guard(btn, fn) {
@@ -67,6 +67,27 @@ function expChip(exp) {
   return `<span class="chip ${cls}">${t}</span>`;
 }
 function alertClass(exp) { const d = daysLeft(exp); return d < 0 ? 'dark' : d <= C.DANGER_DAYS ? 'red' : ''; }
+
+/* ---------------- تواريخ المنتجات: إنتاج وانتهاء ---------------- */
+function addMonths(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();   // آخر يوم في الشهر الناتج
+  t.setUTCDate(Math.min(d, last));
+  return t.toISOString().slice(0, 10);
+}
+const bt = (prod, exp) => (prod ? 'إنتاج ' + fmtDate(prod) + ' · ' : '') + 'انتهاء ' + fmtDate(exp);
+// لما تكتب تاريخ الإنتاج وللمنتج مدة صلاحية: تاريخ الانتهاء بيتحسب تلقائي (وتقدر تعدله)
+function autoExp(prodId, expId, pidFn, hintId, selId) {
+  const apply = () => {
+    const p = S.prodBy[pidFn()], m = p && Number(p.shelf_months) > 0 ? Number(p.shelf_months) : 0, pd = val(prodId), h = $(hintId);
+    if (h) { h.style.display = m ? 'block' : 'none'; h.textContent = m ? `مدة صلاحية المنتج ${m} شهر: لما تكتب تاريخ الإنتاج بيتحسب الانتهاء تلقائي (وتقدر تعدله).` : ''; }
+    if (m && pd) $(expId).value = addMonths(pd, m);
+  };
+  on(prodId, 'change', apply); on(prodId, 'input', apply);
+  if (selId) on(selId, 'change', apply);
+  apply();
+}
 
 function productOptions() {
   let h = '<option value="">اختر المنتج...</option>';
@@ -307,7 +328,7 @@ async function viewHome() {
     $('k3').classList.toggle('bad', red > 0);
     all.sort((a, b) => a.expiry_date.localeCompare(b.expiry_date));
     $('nearcard').style.display = all.length ? 'block' : 'none';
-    $('near').innerHTML = all.slice(0, 3).map(r => `<a class="nr" href="#/alerts"><div>${brandBadge(brandOfProd(r.product_id))} <b>${esc(prodName(r.product_id))}</b><div class="muted">${esc(r.where)} · ${fmtDate(r.expiry_date)}</div></div>${expChip(r.expiry_date)}</a>`).join('');
+    $('near').innerHTML = all.slice(0, 3).map(r => `<a class="nr" href="#/alerts"><div>${brandBadge(brandOfProd(r.product_id))} <b>${esc(prodName(r.product_id))}</b><div class="muted">${esc(r.where)} · ${bt(r.prod_date, r.expiry_date)}</div></div>${expChip(r.expiry_date)}</a>`).join('');
     $('upd').textContent = 'آخر تحديث ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     drawChart();
   };
@@ -347,32 +368,40 @@ async function viewReceive() {
     <section class="card">
       <label class="lbl">المنتج</label><select id="rp">${productOptions()}</select>
       <div class="grid2">
-        <div><label class="lbl">تاريخ الصلاحية</label><input type="date" id="re"></div>
-        <div><label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="rb" placeholder="0"></div>
+        <div><label class="lbl">تاريخ الإنتاج (اختياري)</label><input type="date" id="rpd"></div>
+        <div><label class="lbl">تاريخ الانتهاء</label><input type="date" id="re"></div>
       </div>
+      <div class="muted" id="rhint" style="display:none"></div>
+      <label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="rb" placeholder="0">
       <button class="btn" id="radd">+ إضافة للقائمة</button>
     </section>
     <section class="card"><h3>قائمة الاستلام</h3><div id="rl"></div>
       <label class="lbl">ملاحظات (اختياري)</label><input type="text" id="rn">
       <button class="btn primary" id="rsave">حفظ الاستلام</button></section>
     <section class="card"><h3>استلامات يوم ${fmtDate(S.date)}</h3><div id="rday"></div></section>`);
+  autoExp('rpd', 're', () => +val('rp'), 'rhint', 'rp');
 
   const renderLines = () => {
-    $('rl').innerHTML = lines.length ? lines.map((l, i) => `<div class="row"><div>${brandBadge(brandOfProd(l.pid))} ${esc(prodName(l.pid))}<div class="muted">صلاحية ${fmtDate(l.exp)} · ${num(l.boxes)} بوكس</div></div><button class="btn small danger" data-i="${i}">حذف</button></div>`).join('') : '<div class="muted">لسه ما أضفتش أسطر</div>';
+    $('rl').innerHTML = lines.length ? lines.map((l, i) => `<div class="row"><div>${brandBadge(brandOfProd(l.pid))} ${esc(prodName(l.pid))}<div class="muted">${bt(l.prod, l.exp)} · ${num(l.boxes)} بوكس</div></div><button class="btn small danger" data-i="${i}">حذف</button></div>`).join('') : '<div class="muted">لسه ما أضفتش أسطر</div>';
   };
   renderLines();
   $('rl').onclick = e => { const b = e.target.closest('[data-i]'); if (b) { lines.splice(+b.dataset.i, 1); renderLines(); } };
   on('radd', 'click', () => {
-    const pid = +val('rp'), exp = val('re'), boxes = toNum(val('rb'));
+    const pid = +val('rp'), prod = val('rpd') || null, exp = val('re'), boxes = toNum(val('rb'));
     if (!pid) return toast('اختر المنتج', true);
-    if (!exp) return toast('اكتب تاريخ الصلاحية', true);
+    if (!exp) return toast('اكتب تاريخ الانتهاء', true);
+    if (prod && prod > exp) return toast('تاريخ الإنتاج لازم يكون قبل تاريخ الانتهاء', true);
     if (!(boxes > 0)) return toast('اكتب الكمية بالبوكس', true);
-    lines.push({ pid, exp, boxes }); renderLines(); $('rb').value = ''; $('rb').focus();
+    lines.push({ pid, prod, exp, boxes }); renderLines(); $('rb').value = ''; $('rb').focus();
   });
   on('rsave', 'click', () => guard($('rsave'), async () => {
     if (!lines.length) return toast('أضف سطرًا واحدًا على الأقل', true);
     const notes = val('rn').trim() || null;
-    const { error } = await sb.from('hm_receipts').insert(lines.map(l => ({ receipt_date: S.date, product_id: l.pid, expiry_date: l.exp, boxes: l.boxes, notes })));
+    const { error } = await sb.from('hm_receipts').insert(lines.map(l => {
+      const o = { receipt_date: S.date, product_id: l.pid, expiry_date: l.exp, boxes: l.boxes, notes };
+      if (l.prod) o.prod_date = l.prod;          // لا نرسله إلا لو اتكتب (يحتاج ملف الترقية 2)
+      return o;
+    }));
     if (error) throw error;
     lines.length = 0; renderLines(); $('rn').value = ''; toast('تم حفظ الاستلام'); loadDay();
   }));
@@ -380,7 +409,7 @@ async function viewReceive() {
     const { data, error } = await sb.from('hm_receipts').select('*').eq('receipt_date', S.date).order('id');
     if (error) return fail(error);
     const el = $('rday'); if (!el) return;
-    el.innerHTML = data.length ? data.map(r => `<div class="row"><div>${brandBadge(brandOfProd(r.product_id))} ${esc(prodName(r.product_id))}<div class="muted">صلاحية ${fmtDate(r.expiry_date)} · ${num(r.boxes)} بوكس</div></div><button class="btn small danger" data-del="${r.id}">حذف</button></div>`).join('') : '<div class="muted">لا يوجد استلام في هذا اليوم</div>';
+    el.innerHTML = data.length ? data.map(r => `<div class="row"><div>${brandBadge(brandOfProd(r.product_id))} ${esc(prodName(r.product_id))}<div class="muted">${bt(r.prod_date, r.expiry_date)} · ${num(r.boxes)} بوكس</div></div><button class="btn small danger" data-del="${r.id}">حذف</button></div>`).join('') : '<div class="muted">لا يوجد استلام في هذا اليوم</div>';
     el.onclick = async e => {
       const b = e.target.closest('[data-del]'); if (!b || !confirm('حذف السطر ده؟ المخزون هيتعدل.')) return;
       const { error } = await sb.from('hm_receipts').delete().eq('id', b.dataset.del); if (error) return fail(error); loadDay();
@@ -394,8 +423,9 @@ async function viewDist() {
   const { data: st, error } = await sb.from('hm_stock').select('*').gt('available', 0).order('expiry_date');
   if (error) throw error;
   const lines = [];
-  const availOrig = (pid, exp) => { const r = st.find(x => x.product_id == pid && x.expiry_date === exp); return r ? Number(r.available) : 0; };
-  const availNow = (pid, exp) => availOrig(pid, exp) - lines.filter(l => l.pid == pid && l.exp === exp).reduce((a, l) => a + l.boxes, 0);
+  const same = (l, pid, prod, exp) => l.pid == pid && (l.prod || null) === (prod || null) && l.exp === exp;
+  const availOrig = (pid, prod, exp) => { const r = st.find(x => x.product_id == pid && (x.prod_date || null) === (prod || null) && x.expiry_date === exp); return r ? Number(r.available) : 0; };
+  const availNow = (pid, prod, exp) => availOrig(pid, prod, exp) - lines.filter(l => same(l, pid, prod, exp)).reduce((a, l) => a + l.boxes, 0);
 
   page('توزيع على المحلات', `${needSetup()}
     <section class="card">
@@ -403,47 +433,61 @@ async function viewDist() {
     </section>
     <section class="card">
       <label class="lbl">المنتج</label><select id="dp">${productOptions()}</select>
-      <label class="lbl">تاريخ الصلاحية</label><select id="dx"></select>
-      <div id="dnw" style="display:none"><label class="lbl">اكتب التاريخ</label><input type="date" id="dn"></div>
+      <label class="lbl">الدفعة (تاريخ الإنتاج والانتهاء)</label><select id="dx"></select>
+      <div id="dnw" style="display:none">
+        <div class="grid2">
+          <div><label class="lbl">تاريخ الإنتاج (اختياري)</label><input type="date" id="dnp"></div>
+          <div><label class="lbl">تاريخ الانتهاء</label><input type="date" id="dn"></div>
+        </div>
+        <div class="muted" id="dhint" style="display:none"></div>
+      </div>
       <label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="db" placeholder="0">
-      <button class="btn" id="dadd">+ إضافة (ممكن أكتر من منتج وأكتر من تاريخ)</button>
+      <button class="btn" id="dadd">+ إضافة (ممكن أكتر من منتج وأكتر من دفعة)</button>
     </section>
     <section class="card"><h3>أسطر التوزيع</h3><div id="dl"></div>
       <label class="lbl">ملاحظات (اختياري)</label><input type="text" id="dnt">
       <button class="btn primary" id="dsave">حفظ التوزيع</button></section>
     <section class="card"><h3>توزيعات يوم ${fmtDate(S.date)}</h3><div id="dday"></div></section>`);
+  autoExp('dnp', 'dn', () => +val('dp'), 'dhint', 'dp');
 
   const fillExp = () => {
     const pid = val('dp'), rows = pid ? st.filter(x => x.product_id == pid) : [];
-    $('dx').innerHTML = rows.map(r => `<option value="${r.expiry_date}">${fmtDate(r.expiry_date)} — متاح ${num(availNow(pid, r.expiry_date))} بوكس</option>`).join('') + (pid ? '<option value="__new">تاريخ آخر (أكتبه بنفسي)...</option>' : '');
+    $('dx').innerHTML = rows.map(r => `<option value="${(r.prod_date || '') + '|' + r.expiry_date}">${bt(r.prod_date, r.expiry_date)} — متاح ${num(availNow(pid, r.prod_date, r.expiry_date))} بوكس</option>`).join('') + (pid ? '<option value="__new">دفعة أخرى (أكتب التواريخ بنفسي)...</option>' : '');
     toggleNew();
   };
   const toggleNew = () => { $('dnw').style.display = val('dx') === '__new' ? 'block' : 'none'; };
   const renderLines = () => {
-    $('dl').innerHTML = lines.length ? lines.map((l, i) => `<div class="row"><div>${brandBadge(brandOfProd(l.pid))} ${esc(prodName(l.pid))}<div class="muted">صلاحية ${fmtDate(l.exp)} · ${num(l.boxes)} بوكس</div></div><button class="btn small danger" data-i="${i}">حذف</button></div>`).join('') : '<div class="muted">لسه ما أضفتش أسطر</div>';
+    $('dl').innerHTML = lines.length ? lines.map((l, i) => `<div class="row"><div>${brandBadge(brandOfProd(l.pid))} ${esc(prodName(l.pid))}<div class="muted">${bt(l.prod, l.exp)} · ${num(l.boxes)} بوكس</div></div><button class="btn small danger" data-i="${i}">حذف</button></div>`).join('') : '<div class="muted">لسه ما أضفتش أسطر</div>';
   };
   renderLines(); fillExp();
   on('dp', 'change', fillExp); on('dx', 'change', toggleNew);
   $('dl').onclick = e => { const b = e.target.closest('[data-i]'); if (b) { lines.splice(+b.dataset.i, 1); renderLines(); fillExp(); } };
   on('dadd', 'click', () => {
     const pid = +val('dp'), boxes = toNum(val('db'));
-    const exp = val('dx') === '__new' ? val('dn') : val('dx');
+    let prod = null, exp = '';
+    if (val('dx') === '__new') { prod = val('dnp') || null; exp = val('dn'); }
+    else if (val('dx')) { const x = val('dx').split('|'); prod = x[0] || null; exp = x[1]; }
     if (!pid) return toast('اختر المنتج', true);
-    if (!exp) return toast('اختر أو اكتب تاريخ الصلاحية', true);
+    if (!exp) return toast('اختر الدفعة أو اكتب تاريخ الانتهاء', true);
+    if (prod && prod > exp) return toast('تاريخ الإنتاج لازم يكون قبل تاريخ الانتهاء', true);
     if (!(boxes > 0)) return toast('اكتب الكمية بالبوكس', true);
-    lines.push({ pid, exp, boxes }); renderLines(); $('db').value = ''; fillExp();
+    lines.push({ pid, prod, exp, boxes }); renderLines(); $('db').value = ''; fillExp();
   });
   on('dsave', 'click', () => guard($('dsave'), async () => {
     const sid = +val('ds');
     if (!sid) return toast('اختر المحل', true);
     if (!lines.length) return toast('أضف سطرًا واحدًا على الأقل', true);
     const tot = {};
-    lines.forEach(l => { const k = l.pid + '|' + l.exp; tot[k] = (tot[k] || 0) + l.boxes; });
-    const over = Object.keys(tot).filter(k => { const [p, e] = k.split('|'); return tot[k] > availOrig(p, e); });
-    if (over.length && !confirm('في أسطر الكمية فيها أكبر من المتاح في مخزونك (أو تاريخ غير مستلم). تكمل؟')) return;
+    lines.forEach(l => { const k = l.pid + '|' + (l.prod || '') + '|' + l.exp; tot[k] = (tot[k] || 0) + l.boxes; });
+    const over = Object.keys(tot).filter(k => { const [p, pr, e] = k.split('|'); return tot[k] > availOrig(p, pr || null, e); });
+    if (over.length && !confirm('في أسطر الكمية فيها أكبر من المتاح في مخزونك (أو دفعة غير مستلمة). تكمل؟')) return;
     const { data: h, error: e1 } = await sb.from('hm_distributions').insert({ dist_date: S.date, store_id: sid, notes: val('dnt').trim() || null }).select('id').single();
     if (e1) throw e1;
-    const { error: e2 } = await sb.from('hm_distribution_items').insert(lines.map(l => ({ distribution_id: h.id, product_id: l.pid, expiry_date: l.exp, boxes: l.boxes })));
+    const { error: e2 } = await sb.from('hm_distribution_items').insert(lines.map(l => {
+      const o = { distribution_id: h.id, product_id: l.pid, expiry_date: l.exp, boxes: l.boxes };
+      if (l.prod) o.prod_date = l.prod;
+      return o;
+    }));
     if (e2) { await sb.from('hm_distributions').delete().eq('id', h.id); throw e2; }
     toast('تم حفظ التوزيع'); viewDist();
   }));
@@ -451,7 +495,7 @@ async function viewDist() {
     const { data, error } = await sb.from('hm_distributions').select('*, hm_distribution_items(*)').eq('dist_date', S.date).order('id');
     if (error) return fail(error);
     const el = $('dday'); if (!el) return;
-    el.innerHTML = data.length ? data.map(d => `<div class="item"><div class="top"><b>${esc(storeName(d.store_id))}</b><button class="btn small danger" data-del="${d.id}">حذف</button></div>${d.hm_distribution_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · ${num(i.boxes)} بوكس</div>`).join('')}</div>`).join('') : '<div class="muted">لا يوجد توزيع في هذا اليوم</div>';
+    el.innerHTML = data.length ? data.map(d => `<div class="item"><div class="top"><b>${esc(storeName(d.store_id))}</b><button class="btn small danger" data-del="${d.id}">حذف</button></div>${d.hm_distribution_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${bt(i.prod_date, i.expiry_date)} · ${num(i.boxes)} بوكس</div>`).join('')}</div>`).join('') : '<div class="muted">لا يوجد توزيع في هذا اليوم</div>';
     el.onclick = async e => {
       const b = e.target.closest('[data-del]'); if (!b || !confirm('حذف التوزيع ده؟ المخزون هيتعدل.')) return;
       const { error } = await sb.from('hm_distributions').delete().eq('id', b.dataset.del); if (error) return fail(error); viewDist();
@@ -478,11 +522,11 @@ async function openStore(storeId) {
   const { data, error } = await sb.from('hm_store_stock').select('*').eq('store_id', storeId).gt('current_boxes', 0).order('expiry_date');
   if (error) throw error;
   // كل صف: expected = المسجل في سجل المحل، added = صنف أضفته أثناء الزيارة (رصيد لقيته في المحل)
-  const rows = data.map(r => ({ pid: r.product_id, exp: r.expiry_date, expected: Number(r.current_boxes), added: 0, isNew: false, rem: Number(r.current_boxes), ret: 0, dam: 0 }));
+  const rows = data.map(r => ({ pid: r.product_id, prod: r.prod_date || null, exp: r.expiry_date, expected: Number(r.current_boxes), added: 0, isNew: false, rem: Number(r.current_boxes), ret: 0, dam: 0 }));
   const files = [];
   const box = $('vbody');
   const itemHtml = (r, i) => `<div class="item${r.isNew ? ' isnew' : ''}" data-i="${i}">
-      <div class="top"><div>${brandBadge(brandOfProd(r.pid))} <b>${esc(prodName(r.pid))}</b>${r.added > 0 ? ' <span class="chip dark">مضاف في الزيارة</span>' : ''}<div class="muted">صلاحية ${fmtDate(r.exp)} ${expChip(r.exp)}</div></div>
+      <div class="top"><div>${brandBadge(brandOfProd(r.pid))} <b>${esc(prodName(r.pid))}</b>${r.added > 0 ? ' <span class="chip dark">مضاف في الزيارة</span>' : ''}<div class="muted">${bt(r.prod, r.exp)} ${expChip(r.exp)}</div></div>
       <div style="text-align:left"><div class="muted">${r.isNew ? 'الكمية المضافة' : 'المتوقع'}</div><b>${num(r.isNew ? r.added : r.expected)}</b>${!r.isNew && r.added > 0 ? `<div class="muted">+ مضاف ${num(r.added)}</div>` : ''}</div></div>
       <div class="grid3">
         <div><label class="lbl">الموجود</label><input type="text" inputmode="decimal" data-f="rem" value="${r.rem}"></div>
@@ -498,9 +542,11 @@ async function openStore(storeId) {
       <div id="vaddp" class="addp" style="display:none">
         <label class="lbl">المنتج</label><select id="ap">${productOptions()}</select>
         <div class="grid2">
-          <div><label class="lbl">تاريخ الصلاحية</label><input type="date" id="ae"></div>
-          <div><label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="aq" placeholder="0"></div>
+          <div><label class="lbl">تاريخ الإنتاج (اختياري)</label><input type="date" id="apd"></div>
+          <div><label class="lbl">تاريخ الانتهاء</label><input type="date" id="ae"></div>
         </div>
+        <div class="muted" id="ahint" style="display:none"></div>
+        <label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="aq" placeholder="0">
         <div class="muted" id="adup" style="display:none"></div>
         <button class="btn primary" id="vadd">إضافة للقايمة</button>
         <div class="muted" style="margin-top:6px">الصنف بيتحفظ مع الزيارة ويفضل في سجل المحل، وبيظهر في التقرير. وبيتحسب مبيعه من الزيارة الجاية.</div>
@@ -535,22 +581,24 @@ async function openStore(storeId) {
 
   // ----- إضافة صنف موجود في المحل -----
   const checkDup = () => {
-    const pid = +val('ap'), exp = val('ae'), el = $('adup');
-    const hit = pid && exp ? rows.find(r => r.pid === pid && r.exp === exp) : null;
+    const pid = +val('ap'), prod = val('apd') || null, exp = val('ae'), el = $('adup');
+    const hit = pid && exp ? rows.find(r => r.pid === pid && (r.prod || null) === prod && r.exp === exp) : null;
     el.style.display = hit ? 'block' : 'none';
-    if (hit) el.textContent = 'الصنف ده بنفس التاريخ موجود في القايمة. الكمية هتتضاف عليه كزيادة.';
+    if (hit) el.textContent = 'الصنف ده بنفس التواريخ موجود في القايمة. الكمية هتتضاف عليه كزيادة.';
   };
   on('vaddtog', 'click', () => { const p = $('vaddp'); p.style.display = p.style.display === 'none' ? 'block' : 'none'; });
-  on('ap', 'change', checkDup); on('ae', 'change', checkDup);
+  autoExp('apd', 'ae', () => +val('ap'), 'ahint', 'ap');
+  on('ap', 'change', checkDup); on('apd', 'change', checkDup); on('apd', 'input', checkDup); on('ae', 'change', checkDup);
   on('vadd', 'click', () => {
-    const pid = +val('ap'), exp = val('ae'), q = toNum(val('aq'));
+    const pid = +val('ap'), prod = val('apd') || null, exp = val('ae'), q = toNum(val('aq'));
     if (!pid) return toast('اختر المنتج', true);
-    if (!exp) return toast('اكتب تاريخ الصلاحية', true);
+    if (!exp) return toast('اكتب تاريخ الانتهاء', true);
+    if (prod && prod > exp) return toast('تاريخ الإنتاج لازم يكون قبل تاريخ الانتهاء', true);
     if (!(q > 0)) return toast('اكتب الكمية بالبوكس', true);
     calc();                                   // نحفظ اللي اتكتب قبل إعادة الرسم
-    const hit = rows.find(r => r.pid === pid && r.exp === exp);
+    const hit = rows.find(r => r.pid === pid && (r.prod || null) === prod && r.exp === exp);
     if (hit) { hit.added += q; hit.rem += q; }
-    else rows.push({ pid, exp, expected: 0, added: q, isNew: true, rem: q, ret: 0, dam: 0 });
+    else rows.push({ pid, prod, exp, expected: 0, added: q, isNew: true, rem: q, ret: 0, dam: 0 });
     renderItems(); $('aq').value = ''; $('adup').style.display = 'none';
     toast('تمت إضافة الصنف للزيارة');
   });
@@ -572,6 +620,7 @@ async function openStore(storeId) {
     if (rows.length) {
       const { error: e2 } = await sb.from('hm_visit_items').insert(rows.map(r => {
         const o = { visit_id: v.id, product_id: r.pid, expiry_date: r.exp, expected_boxes: r.expected, remaining_boxes: r.rem, returned_boxes: r.ret, damaged_boxes: r.dam };
+        if (r.prod) o.prod_date = r.prod;               // لا نرسله إلا لو اتكتب (يحتاج ملف الترقية 2)
         if (r.added > 0) o.added_boxes = r.added;      // لا نرسله إلا لو فيه صنف مضاف (يحتاج ملف الترقية SQL)
         return o;
       }));
@@ -605,15 +654,15 @@ async function viewStore(id) {
   const tSold = vs.data.reduce((a, v) => a + v.hm_visit_items.reduce((b, i) => b + Number(i.sold_boxes), 0), 0);
   page(storeName(id), `
     <section class="card"><h3>الموجود حاليًا في المحل</h3>
-      ${stk.data.length ? stk.data.map(r => `<div class="row"><div>${brandBadge(brandOfProd(r.product_id))} ${esc(prodName(r.product_id))}<div class="muted">صلاحية ${fmtDate(r.expiry_date)}</div></div><div>${num(r.current_boxes)} بوكس ${expChip(r.expiry_date)}</div></div>`).join('') : '<div class="muted">لا توجد بضاعة</div>'}
+      ${stk.data.length ? stk.data.map(r => `<div class="row"><div>${brandBadge(brandOfProd(r.product_id))} ${esc(prodName(r.product_id))}<div class="muted">${bt(r.prod_date, r.expiry_date)}</div></div><div>${num(r.current_boxes)} بوكس ${expChip(r.expiry_date)}</div></div>`).join('') : '<div class="muted">لا توجد بضاعة</div>'}
     </section>
     <section class="card"><h3>إجمالي المبيع المسجل: ${num(tSold)} بوكس</h3>
       <a class="btn primary" style="text-align:center;text-decoration:none" href="#/visit">زيارة جديدة</a></section>
     <section class="card"><h3>الزيارات</h3>
-      ${vs.data.length ? vs.data.map(v => `<div class="item"><b>${fmtDate(v.visit_date)}</b>${v.hm_visit_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · موجود ${num(i.remaining_boxes)} · مبيع ${num(i.sold_boxes)}${Number(i.added_boxes) > 0 ? ' · مضاف ' + num(i.added_boxes) : ''}</div>`).join('')}${v.notes ? `<div>📝 ${esc(v.notes)}</div>` : ''}</div>`).join('') : '<div class="muted">لا توجد زيارات</div>'}
+      ${vs.data.length ? vs.data.map(v => `<div class="item"><b>${fmtDate(v.visit_date)}</b>${v.hm_visit_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${bt(i.prod_date, i.expiry_date)} · موجود ${num(i.remaining_boxes)} · مبيع ${num(i.sold_boxes)}${Number(i.added_boxes) > 0 ? ' · مضاف ' + num(i.added_boxes) : ''}</div>`).join('')}${v.notes ? `<div>📝 ${esc(v.notes)}</div>` : ''}</div>`).join('') : '<div class="muted">لا توجد زيارات</div>'}
     </section>
     <section class="card"><h3>التوزيعات</h3>
-      ${ds.data.length ? ds.data.map(d => `<div class="item"><b>${fmtDate(d.dist_date)}</b>${d.hm_distribution_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · ${num(i.boxes)} بوكس</div>`).join('')}</div>`).join('') : '<div class="muted">لا توجد توزيعات</div>'}
+      ${ds.data.length ? ds.data.map(d => `<div class="item"><b>${fmtDate(d.dist_date)}</b>${d.hm_distribution_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${bt(i.prod_date, i.expiry_date)} · ${num(i.boxes)} بوكس</div>`).join('')}</div>`).join('') : '<div class="muted">لا توجد توزيعات</div>'}
     </section>`);
 }
 
@@ -623,7 +672,7 @@ async function viewAlerts() {
   const card = (r, where, qty) => `<div class="card alertcard ${alertClass(r.expiry_date)}">
       <div class="top" style="display:flex;justify-content:space-between;gap:8px">
         <div>${brandBadge(brandOfProd(r.product_id))} <b>${esc(prodName(r.product_id))}</b>
-        <div class="muted">${esc(where)}</div><div class="muted">صلاحية ${fmtDate(r.expiry_date)} · ${num(qty)} بوكس</div></div>
+        <div class="muted">${esc(where)}</div><div class="muted">${bt(r.prod_date, r.expiry_date)} · ${num(qty)} بوكس</div></div>
         <div>${expChip(r.expiry_date)}</div></div></div>`;
   page('تنبيهات الصلاحية', `
     <div class="muted" style="margin-bottom:8px">أي منتج باقي على انتهائه أقل من ${C.ALERT_DAYS} يوم (محسوبة من ${fmtDate(S.date)}).</div>
@@ -642,7 +691,7 @@ async function viewStock() {
   const html = Object.keys(by).map(k => {
     const b = S.brandBy[k]; const tot = by[k].reduce((a, r) => a + Number(r.available), 0);
     return `<section class="card"><h3>${brandBadge(b)} ${esc(b ? b.name : '')} — ${num(tot)} بوكس</h3>` +
-      by[k].map(r => `<div class="row"><div>${esc(prodName(r.product_id))}<div class="muted">صلاحية ${fmtDate(r.expiry_date)} ${expChip(r.expiry_date)}</div></div><b>${num(r.available)}</b></div>`).join('') + '</section>';
+      by[k].map(r => `<div class="row"><div>${esc(prodName(r.product_id))}<div class="muted">${bt(r.prod_date, r.expiry_date)} ${expChip(r.expiry_date)}</div></div><b>${num(r.available)}</b></div>`).join('') + '</section>';
   }).join('');
   page('المخزون عندي', html || '<div class="card muted">المخزون فاضي. سجّل استلامًا من المصنع أولًا.</div>');
 }
@@ -700,11 +749,11 @@ async function buildReport() {
     const tot = v.hm_visit_items.reduce((a, i) => a + Number(i.sold_boxes), 0);
     h += `<h4>${n + 1}. ${esc(storeName(v.store_id))}</h4>`;
     if (v.hm_visit_items.length) {
-      h += '<table class="t">' + th(['المنتج', 'الصلاحية', 'المتوقع', 'الموجود', 'مرتجع', 'تالف', 'المبيع']) +
+      h += '<table class="t">' + th(['المنتج', 'الإنتاج', 'الانتهاء', 'المتوقع', 'الموجود', 'مرتجع', 'تالف', 'المبيع']) +
         v.hm_visit_items.map(i => {
           const cls = daysLeft(i.expiry_date) <= C.DANGER_DAYS ? 'crit' : daysLeft(i.expiry_date) <= C.ALERT_DAYS ? 'warn' : '';
-          return `<tr class="${cls}"><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}${Number(i.added_boxes) > 0 ? ' <small>(مضاف في الزيارة)</small>' : ''}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.expected_boxes)}${Number(i.added_boxes) > 0 ? `<br><small>+ ${num(i.added_boxes)} مضاف</small>` : ''}</td><td>${num(i.remaining_boxes)}</td><td>${num(i.returned_boxes)}</td><td>${num(i.damaged_boxes)}</td><td>${num(i.sold_boxes)}</td></tr>`;
-        }).join('') + `<tr><td colspan="6"><b>إجمالي المبيع</b></td><td><b>${num(tot)}</b></td></tr></table>`;
+          return `<tr class="${cls}"><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}${Number(i.added_boxes) > 0 ? ' <small>(مضاف في الزيارة)</small>' : ''}</td><td>${i.prod_date ? fmtDate(i.prod_date) : '-'}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.expected_boxes)}${Number(i.added_boxes) > 0 ? `<br><small>+ ${num(i.added_boxes)} مضاف</small>` : ''}</td><td>${num(i.remaining_boxes)}</td><td>${num(i.returned_boxes)}</td><td>${num(i.damaged_boxes)}</td><td>${num(i.sold_boxes)}</td></tr>`;
+        }).join('') + `<tr><td colspan="7"><b>إجمالي المبيع</b></td><td><b>${num(tot)}</b></td></tr></table>`;
     } else h += '<div class="muted">زيارة بدون جرد</div>';
     if (v.notes) h += `<div><b>ملاحظات:</b> ${esc(v.notes)}</div>`;
     if (v.hm_photos.length) h += '<div class="photos">' + v.hm_photos.map(p => urlBy[p.path] ? `<img src="${esc(urlBy[p.path])}" alt="">` : '').join('') + '</div>';
@@ -712,16 +761,16 @@ async function buildReport() {
 
   h += '<h2>ثانيًا: المنتجات القريبة من انتهاء الصلاحية</h2>';
   if (!nAlerts) h += none; else {
-    h += '<table class="t">' + th(['الموقع', 'المنتج', 'الصلاحية', 'المتبقي', 'الكمية']) +
-      al.stores.map(r => `<tr class="${alertClass(r.expiry_date) ? 'crit' : 'warn'}"><td>${esc(storeName(r.store_id))}</td><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${fmtDate(r.expiry_date)}</td><td>${daysLeft(r.expiry_date) < 0 ? 'منتهي' : daysLeft(r.expiry_date) + ' يوم'}</td><td>${num(r.current_boxes)}</td></tr>`).join('') +
-      al.wh.map(r => `<tr class="${alertClass(r.expiry_date) ? 'crit' : 'warn'}"><td>مخزون عندي</td><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${fmtDate(r.expiry_date)}</td><td>${daysLeft(r.expiry_date) < 0 ? 'منتهي' : daysLeft(r.expiry_date) + ' يوم'}</td><td>${num(r.available)}</td></tr>`).join('') + '</table>';
+    h += '<table class="t">' + th(['الموقع', 'المنتج', 'الإنتاج', 'الانتهاء', 'المتبقي', 'الكمية']) +
+      al.stores.map(r => `<tr class="${alertClass(r.expiry_date) ? 'crit' : 'warn'}"><td>${esc(storeName(r.store_id))}</td><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${r.prod_date ? fmtDate(r.prod_date) : '-'}</td><td>${fmtDate(r.expiry_date)}</td><td>${daysLeft(r.expiry_date) < 0 ? 'منتهي' : daysLeft(r.expiry_date) + ' يوم'}</td><td>${num(r.current_boxes)}</td></tr>`).join('') +
+      al.wh.map(r => `<tr class="${alertClass(r.expiry_date) ? 'crit' : 'warn'}"><td>مخزون عندي</td><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${r.prod_date ? fmtDate(r.prod_date) : '-'}</td><td>${fmtDate(r.expiry_date)}</td><td>${daysLeft(r.expiry_date) < 0 ? 'منتهي' : daysLeft(r.expiry_date) + ' يوم'}</td><td>${num(r.available)}</td></tr>`).join('') + '</table>';
   }
 
   h += '<h2>ثالثًا: الاستلام من المصنع</h2>';
-  h += rc.data.length ? '<table class="t">' + th(['المنتج', 'الصلاحية', 'الكمية (بوكس)']) + rc.data.map(r => `<tr><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${fmtDate(r.expiry_date)}</td><td>${num(r.boxes)}</td></tr>`).join('') + '</table>' : none;
+  h += rc.data.length ? '<table class="t">' + th(['المنتج', 'الإنتاج', 'الانتهاء', 'الكمية (بوكس)']) + rc.data.map(r => `<tr><td>${esc((brandOfProd(r.product_id) || {}).name || '')} ${esc(prodName(r.product_id))}</td><td>${r.prod_date ? fmtDate(r.prod_date) : '-'}</td><td>${fmtDate(r.expiry_date)}</td><td>${num(r.boxes)}</td></tr>`).join('') + '</table>' : none;
 
   h += '<h2>رابعًا: التوزيع على المحلات</h2>';
-  h += ds.data.length ? '<table class="t">' + th(['المحل', 'المنتج', 'الصلاحية', 'الكمية (بوكس)']) + ds.data.map(x => x.hm_distribution_items.map(i => `<tr><td>${esc(storeName(x.store_id))}</td><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.boxes)}</td></tr>`).join('')).join('') + '</table>' : none;
+  h += ds.data.length ? '<table class="t">' + th(['المحل', 'المنتج', 'الإنتاج', 'الانتهاء', 'الكمية (بوكس)']) + ds.data.map(x => x.hm_distribution_items.map(i => `<tr><td>${esc(storeName(x.store_id))}</td><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}</td><td>${i.prod_date ? fmtDate(i.prod_date) : '-'}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.boxes)}</td></tr>`).join('')).join('') + '</table>' : none;
 
   h += `<div class="sign"><div>اسم المندوب: ${esc(S.profile.name)}</div><div>التوقيع</div></div>
       </div></td></tr></tbody></table></div>`;
@@ -749,8 +798,12 @@ async function viewManage() {
     body = `<section class="card"><h3>إضافة منتج</h3>
       <label class="lbl">البراند</label><select id="mb">${S.brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>
       <label class="lbl">اسم المنتج</label><input type="text" id="mn">
+      <label class="lbl">مدة الصلاحية بالأشهر (اختياري، فاضي = يدوي)</label>
+      <input type="text" inputmode="numeric" id="msh" placeholder="مثال: 6">
+      <div class="chips" id="mchips">${[3, 6, 9, 12, 18, 24].map(n => `<button type="button" class="btn small" data-m="${n}">${n} أشهر</button>`).join('')}<button type="button" class="btn small" data-m="">يدوي</button></div>
+      <div class="muted">لو حددت مدة، تاريخ الانتهاء بيتحسب تلقائي من تاريخ الإنتاج.</div>
       <button class="btn primary" id="madd">إضافة</button></section>
-      <section class="card"><h3>المنتجات (${S.products.length})</h3>${S.products.map(p => `<div class="row ${p.active ? '' : 'dim'}"><div>${brandBadge(S.brandBy[p.brand_id])} ${esc(p.name)}${p.active ? '' : ' <span class="muted">(موقوف)</span>'}</div>
+      <section class="card"><h3>المنتجات (${S.products.length})</h3>${S.products.map(p => `<div class="row ${p.active ? '' : 'dim'}"><div>${brandBadge(S.brandBy[p.brand_id])} ${esc(p.name)}${p.active ? '' : ' <span class="muted">(موقوف)</span>'}${Number(p.shelf_months) > 0 ? ` <span class="muted">· مدة ${p.shelf_months} شهر</span>` : ''}</div>
         <div class="acts"><button class="btn small" data-ep="${p.id}">تعديل</button><button class="btn small" data-tp="${p.id}">${p.active ? 'إيقاف' : 'تفعيل'}</button><button class="btn small danger" data-dp="${p.id}">مسح</button></div></div>`).join('') || '<div class="muted">لا توجد منتجات</div>'}</section>`;
   } else if (manageTab === 'stores') {
     body = `<section class="card"><h3>إضافة محل</h3>
@@ -768,9 +821,14 @@ async function viewManage() {
   document.querySelector('.tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) { manageTab = b.dataset.tab; viewManage(); } };
   const refresh = async () => { await loadLookups(); viewManage(); };
 
+  if ($('mchips')) $('mchips').onclick = e => { const b = e.target.closest('[data-m]'); if (b) $('msh').value = b.dataset.m; };
   on('madd', 'click', () => guard($('madd'), async () => {
     const name = val('mn').trim(); if (!name) return toast('اكتب اسم المنتج', true);
-    const { error } = await sb.from('hm_products').insert({ brand_id: +val('mb'), name }); if (error) throw error; toast('تمت الإضافة'); await refresh();
+    const sm = Math.round(toNum(val('msh')));
+    if (val('msh').trim() && !(sm > 0 && sm <= 120)) return toast('مدة الصلاحية لازم تكون رقم من 1 إلى 120 شهر', true);
+    const o = { brand_id: +val('mb'), name };
+    if (sm > 0) o.shelf_months = sm;           // لا نرسله إلا لو اتحدد (يحتاج ملف الترقية 2)
+    const { error } = await sb.from('hm_products').insert(o); if (error) throw error; toast('تمت الإضافة'); await refresh();
   }));
   on('sadd', 'click', () => guard($('sadd'), async () => {
     const name = val('sn').trim(); if (!name) return toast('اكتب اسم المحل', true);
@@ -784,9 +842,12 @@ async function viewManage() {
   // ----- تعديل -----
   document.querySelectorAll('[data-ep]').forEach(b => b.onclick = () => guard(b, async () => {
     const p = S.prodBy[b.dataset.ep];
-    const r = await modal({ title: 'تعديل المنتج', fields: [{ label: 'اسم المنتج', value: p.name }] });
+    const r = await modal({ title: 'تعديل المنتج', fields: [{ label: 'اسم المنتج', value: p.name }, { label: 'مدة الصلاحية بالأشهر (فاضي = يدوي)', value: p.shelf_months || '' }] });
     if (!r) return; if (!r[0]) return toast('اكتب الاسم', true);
-    const { error } = await sb.from('hm_products').update({ name: r[0] }).eq('id', p.id); if (error) throw error; toast('تم التعديل'); await refresh();
+    const upd = { name: r[0] }, sm = r[1] === '' || r[1] == null ? null : Math.round(toNum(String(r[1])));
+    if (sm !== null && !(sm > 0 && sm <= 120)) return toast('مدة الصلاحية لازم تكون رقم من 1 إلى 120', true);
+    if ((sm || null) !== (p.shelf_months || null)) upd.shelf_months = sm;    // تغيير المدة لا يمس السجلات القديمة
+    const { error } = await sb.from('hm_products').update(upd).eq('id', p.id); if (error) throw error; toast('تم التعديل'); await refresh();
   }));
   document.querySelectorAll('[data-es]').forEach(b => b.onclick = () => guard(b, async () => {
     const s = S.storeBy[b.dataset.es];
