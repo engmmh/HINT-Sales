@@ -38,14 +38,15 @@ const val = id => { const e = $(id); return e ? e.value : ''; };
 function on(id, ev, fn) { const e = $(id); if (e) e.addEventListener(ev, fn); }
 let toastTimer;
 function toast(msg, err) {
-  const t = $('toast'); t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast', 3200);
+  const t = $('toast'); t.textContent = msg; t.className = 'toast no-print show' + (err ? ' err' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast no-print', 3200);
 }
 function fail(e) {
   console.error(e);
   let m = e && e.message ? e.message : String(e);
   if (e && e.code === '23505') m = 'الاسم ده موجود بالفعل';
   else if (e && e.code === '23503') m = 'مينفعش، عليه بيانات مرتبطة';
+  else if (/added_boxes|hm_collection/i.test(m)) m = 'لازم تشغّل ملف الترقية SQL في Supabase الأول';
   toast('حصل خطأ: ' + m, true);
 }
 async function guard(btn, fn) {
@@ -122,6 +123,7 @@ const ICONS = {
   report: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/>',
   manage: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   sales: '<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
+  coll: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 12h.01M18 12h.01"/>',
   refresh: '<path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/>'
 };
 const icon = (n, s) => `<svg class="ico" width="${s || 24}" height="${s || 24}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -136,7 +138,7 @@ function modal(opts) {
   return new Promise(resolve => {
     const ov = document.createElement('div'); ov.className = 'ov no-print';
     ov.innerHTML = `<div class="mdl"><h3>${esc(opts.title)}</h3>` +
-      opts.fields.map((f, i) => `<label class="lbl">${esc(f.label)}</label><input type="text" id="mf${i}" value="${esc(f.value || '')}">`).join('') +
+      opts.fields.map((f, i) => `<label class="lbl">${esc(f.label)}</label><input type="${f.type || 'text'}" id="mf${i}" value="${esc(f.value || '')}">`).join('') +
       `<div class="mact"><button class="btn primary" id="mok">${esc(opts.ok || 'حفظ')}</button><button class="btn" id="mno">إلغاء</button></div></div>`;
     document.body.appendChild(ov);
     const close = v => { ov.remove(); resolve(v); };
@@ -263,6 +265,7 @@ async function viewHome() {
       ${tile('alerts', 'alerts', 'تنبيهات', 'قرب انتهاء الصلاحية')}
       ${tile('stock', 'stock', 'المخزون', 'الكميات والتواريخ')}
       ${tile('report', 'report', 'تقرير نهائي', 'PDF بتصميم الشركة')}
+      ${tile('coll', 'coll', 'تحصيل المناديب', 'كشف PDF وExcel')}
       ${tile('manage', 'manage', 'المنتجات والمحلات', 'إضافة وتعديل ومسح')}
     </div>
     <div style="margin-top:14px">${installBlock()}</div>`);
@@ -474,21 +477,34 @@ async function compress(file, max = 1280, q = 0.72) {
 async function openStore(storeId) {
   const { data, error } = await sb.from('hm_store_stock').select('*').eq('store_id', storeId).gt('current_boxes', 0).order('expiry_date');
   if (error) throw error;
-  const rows = data.map(r => ({ pid: r.product_id, exp: r.expiry_date, expected: Number(r.current_boxes) }));
+  // كل صف: expected = المسجل في سجل المحل، added = صنف أضفته أثناء الزيارة (رصيد لقيته في المحل)
+  const rows = data.map(r => ({ pid: r.product_id, exp: r.expiry_date, expected: Number(r.current_boxes), added: 0, isNew: false, rem: Number(r.current_boxes), ret: 0, dam: 0 }));
   const files = [];
   const box = $('vbody');
-  const itemHtml = (r, i) => `<div class="item" data-i="${i}">
-      <div class="top"><div>${brandBadge(brandOfProd(r.pid))} <b>${esc(prodName(r.pid))}</b><div class="muted">صلاحية ${fmtDate(r.exp)} ${expChip(r.exp)}</div></div>
-      <div style="text-align:left"><div class="muted">المتوقع</div><b>${num(r.expected)}</b></div></div>
+  const itemHtml = (r, i) => `<div class="item${r.isNew ? ' isnew' : ''}" data-i="${i}">
+      <div class="top"><div>${brandBadge(brandOfProd(r.pid))} <b>${esc(prodName(r.pid))}</b>${r.added > 0 ? ' <span class="chip dark">مضاف في الزيارة</span>' : ''}<div class="muted">صلاحية ${fmtDate(r.exp)} ${expChip(r.exp)}</div></div>
+      <div style="text-align:left"><div class="muted">${r.isNew ? 'الكمية المضافة' : 'المتوقع'}</div><b>${num(r.isNew ? r.added : r.expected)}</b>${!r.isNew && r.added > 0 ? `<div class="muted">+ مضاف ${num(r.added)}</div>` : ''}</div></div>
       <div class="grid3">
-        <div><label class="lbl">الموجود</label><input type="text" inputmode="decimal" data-f="rem" value="${r.expected}"></div>
-        <div><label class="lbl">مرتجع</label><input type="text" inputmode="decimal" data-f="ret" value="0"></div>
-        <div><label class="lbl">تالف</label><input type="text" inputmode="decimal" data-f="dam" value="0"></div>
+        <div><label class="lbl">الموجود</label><input type="text" inputmode="decimal" data-f="rem" value="${r.rem}"></div>
+        <div><label class="lbl">مرتجع</label><input type="text" inputmode="decimal" data-f="ret" value="${r.ret}"></div>
+        <div><label class="lbl">تالف</label><input type="text" inputmode="decimal" data-f="dam" value="${r.dam}"></div>
       </div>
-      <div style="margin-top:6px">المبيع: <span class="sold" data-sold>0</span> بوكس</div></div>`;
+      <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center"><span>المبيع: <span class="sold" data-sold>0</span> بوكس</span>${r.isNew ? `<button class="btn small danger" data-rm="${i}">حذف الصنف</button>` : ''}</div></div>`;
   box.innerHTML = `<section class="card">
       <div class="top" style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${esc(storeName(storeId))}</h3><a href="#/store/${storeId}">سجل المحل</a></div>
-      ${rows.length ? '<div class="muted">سجّل الموجود فعليًا الآن، والمبيع بيتحسب تلقائي.</div>' + rows.map(itemHtml).join('') : '<div class="muted" style="margin-top:8px">مفيش بضاعة مسجلة في المحل ده. سجّل توزيعًا أولًا (ولو لبضاعة قديمة اختر تاريخ توزيع سابق).</div>'}
+      <div class="muted" id="vhint"></div>
+      <div id="vitems"></div>
+      <button class="btn" id="vaddtog">+ إضافة صنف موجود في المحل</button>
+      <div id="vaddp" class="addp" style="display:none">
+        <label class="lbl">المنتج</label><select id="ap">${productOptions()}</select>
+        <div class="grid2">
+          <div><label class="lbl">تاريخ الصلاحية</label><input type="date" id="ae"></div>
+          <div><label class="lbl">الكمية (بوكس)</label><input type="text" inputmode="decimal" id="aq" placeholder="0"></div>
+        </div>
+        <div class="muted" id="adup" style="display:none"></div>
+        <button class="btn primary" id="vadd">إضافة للقايمة</button>
+        <div class="muted" style="margin-top:6px">الصنف بيتحفظ مع الزيارة ويفضل في سجل المحل، وبيظهر في التقرير. وبيتحسب مبيعه من الزيارة الجاية.</div>
+      </div>
     </section>
     <section class="card">
       <label class="lbl">ملاحظات ومشاكل ومنتجات تحتاج متابعة أو استبدال</label><textarea id="vn"></textarea>
@@ -502,27 +518,63 @@ async function openStore(storeId) {
     box.querySelectorAll('.item').forEach(el => {
       const r = rows[+el.dataset.i];
       r.rem = toNum(el.querySelector('[data-f=rem]').value); r.ret = toNum(el.querySelector('[data-f=ret]').value); r.dam = toNum(el.querySelector('[data-f=dam]').value);
-      r.sold = r.expected - r.rem - r.ret - r.dam;
+      r.sold = r.expected + r.added - r.rem - r.ret - r.dam;
       el.querySelector('[data-sold]').textContent = num(r.sold);
       const isBad = r.sold < 0 || r.rem < 0 || r.ret < 0 || r.dam < 0;
       el.classList.toggle('bad', isBad); bad = bad || isBad;
     });
     return !bad;
   };
+  const renderItems = () => {
+    $('vhint').textContent = rows.length ? 'سجّل الموجود فعليًا الآن، والمبيع بيتحسب تلقائي.' : 'مفيش بضاعة مسجلة في المحل ده. أضف الأصناف اللي لقيتها بالزرار اللي تحت، أو سجّل توزيعًا الأول.';
+    $('vitems').innerHTML = rows.map(itemHtml).join('');
+    calc();
+  };
   box.addEventListener('input', e => { if (e.target.matches('[data-f]')) calc(); });
-  calc();
+  renderItems();
+
+  // ----- إضافة صنف موجود في المحل -----
+  const checkDup = () => {
+    const pid = +val('ap'), exp = val('ae'), el = $('adup');
+    const hit = pid && exp ? rows.find(r => r.pid === pid && r.exp === exp) : null;
+    el.style.display = hit ? 'block' : 'none';
+    if (hit) el.textContent = 'الصنف ده بنفس التاريخ موجود في القايمة. الكمية هتتضاف عليه كزيادة.';
+  };
+  on('vaddtog', 'click', () => { const p = $('vaddp'); p.style.display = p.style.display === 'none' ? 'block' : 'none'; });
+  on('ap', 'change', checkDup); on('ae', 'change', checkDup);
+  on('vadd', 'click', () => {
+    const pid = +val('ap'), exp = val('ae'), q = toNum(val('aq'));
+    if (!pid) return toast('اختر المنتج', true);
+    if (!exp) return toast('اكتب تاريخ الصلاحية', true);
+    if (!(q > 0)) return toast('اكتب الكمية بالبوكس', true);
+    calc();                                   // نحفظ اللي اتكتب قبل إعادة الرسم
+    const hit = rows.find(r => r.pid === pid && r.exp === exp);
+    if (hit) { hit.added += q; hit.rem += q; }
+    else rows.push({ pid, exp, expected: 0, added: q, isNew: true, rem: q, ret: 0, dam: 0 });
+    renderItems(); $('aq').value = ''; $('adup').style.display = 'none';
+    toast('تمت إضافة الصنف للزيارة');
+  });
+  $('vitems').addEventListener('click', e => {
+    const b = e.target.closest('[data-rm]'); if (!b) return;
+    calc(); rows.splice(+b.dataset.rm, 1); renderItems();
+  });
+
   const renderThumbs = () => {
     $('vt').innerHTML = files.map((f, i) => `<div class="th"><img src="${URL.createObjectURL(f)}"><button data-x="${i}">×</button></div>`).join('');
   };
   $('vf').addEventListener('change', e => { files.push(...e.target.files); e.target.value = ''; renderThumbs(); });
   $('vt').onclick = e => { const b = e.target.closest('[data-x]'); if (b) { files.splice(+b.dataset.x, 1); renderThumbs(); } };
   $('vsave').addEventListener('click', () => guard($('vsave'), async () => {
-    if (!calc()) return toast('في سطر الأرقام فيه غير منطقية (المبيع بالسالب). الموجود أكبر من المتوقع؟ سجّل توزيعًا بتاريخ سابق الأول.', true);
+    if (!calc()) return toast('في سطر الأرقام فيه غير منطقية (المبيع بالسالب). الموجود أكبر من المتوقع؟ أضفه كصنف موجود في المحل، أو سجّل توزيعًا بتاريخ سابق.', true);
     if (!rows.length && !val('vn').trim() && !files.length && !confirm('الزيارة فاضية. تحفظها كزيارة بس؟')) return;
     const { data: v, error: e1 } = await sb.from('hm_visits').insert({ visit_date: S.date, store_id: storeId, notes: val('vn').trim() || null }).select('id').single();
     if (e1) throw e1;
     if (rows.length) {
-      const { error: e2 } = await sb.from('hm_visit_items').insert(rows.map(r => ({ visit_id: v.id, product_id: r.pid, expiry_date: r.exp, expected_boxes: r.expected, remaining_boxes: r.rem, returned_boxes: r.ret, damaged_boxes: r.dam })));
+      const { error: e2 } = await sb.from('hm_visit_items').insert(rows.map(r => {
+        const o = { visit_id: v.id, product_id: r.pid, expiry_date: r.exp, expected_boxes: r.expected, remaining_boxes: r.rem, returned_boxes: r.ret, damaged_boxes: r.dam };
+        if (r.added > 0) o.added_boxes = r.added;      // لا نرسله إلا لو فيه صنف مضاف (يحتاج ملف الترقية SQL)
+        return o;
+      }));
       if (e2) { await sb.from('hm_visits').delete().eq('id', v.id); throw e2; }
     }
     let failed = 0;
@@ -558,7 +610,7 @@ async function viewStore(id) {
     <section class="card"><h3>إجمالي المبيع المسجل: ${num(tSold)} بوكس</h3>
       <a class="btn primary" style="text-align:center;text-decoration:none" href="#/visit">زيارة جديدة</a></section>
     <section class="card"><h3>الزيارات</h3>
-      ${vs.data.length ? vs.data.map(v => `<div class="item"><b>${fmtDate(v.visit_date)}</b>${v.hm_visit_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · موجود ${num(i.remaining_boxes)} · مبيع ${num(i.sold_boxes)}</div>`).join('')}${v.notes ? `<div>📝 ${esc(v.notes)}</div>` : ''}</div>`).join('') : '<div class="muted">لا توجد زيارات</div>'}
+      ${vs.data.length ? vs.data.map(v => `<div class="item"><b>${fmtDate(v.visit_date)}</b>${v.hm_visit_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · موجود ${num(i.remaining_boxes)} · مبيع ${num(i.sold_boxes)}${Number(i.added_boxes) > 0 ? ' · مضاف ' + num(i.added_boxes) : ''}</div>`).join('')}${v.notes ? `<div>📝 ${esc(v.notes)}</div>` : ''}</div>`).join('') : '<div class="muted">لا توجد زيارات</div>'}
     </section>
     <section class="card"><h3>التوزيعات</h3>
       ${ds.data.length ? ds.data.map(d => `<div class="item"><b>${fmtDate(d.dist_date)}</b>${d.hm_distribution_items.map(i => `<div class="muted">${esc(prodName(i.product_id))} · ${fmtDate(i.expiry_date)} · ${num(i.boxes)} بوكس</div>`).join('')}</div>`).join('') : '<div class="muted">لا توجد توزيعات</div>'}
@@ -651,7 +703,7 @@ async function buildReport() {
       h += '<table class="t">' + th(['المنتج', 'الصلاحية', 'المتوقع', 'الموجود', 'مرتجع', 'تالف', 'المبيع']) +
         v.hm_visit_items.map(i => {
           const cls = daysLeft(i.expiry_date) <= C.DANGER_DAYS ? 'crit' : daysLeft(i.expiry_date) <= C.ALERT_DAYS ? 'warn' : '';
-          return `<tr class="${cls}"><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.expected_boxes)}</td><td>${num(i.remaining_boxes)}</td><td>${num(i.returned_boxes)}</td><td>${num(i.damaged_boxes)}</td><td>${num(i.sold_boxes)}</td></tr>`;
+          return `<tr class="${cls}"><td>${esc((brandOfProd(i.product_id) || {}).name || '')} ${esc(prodName(i.product_id))}${Number(i.added_boxes) > 0 ? ' <small>(مضاف في الزيارة)</small>' : ''}</td><td>${fmtDate(i.expiry_date)}</td><td>${num(i.expected_boxes)}${Number(i.added_boxes) > 0 ? `<br><small>+ ${num(i.added_boxes)} مضاف</small>` : ''}</td><td>${num(i.remaining_boxes)}</td><td>${num(i.returned_boxes)}</td><td>${num(i.damaged_boxes)}</td><td>${num(i.sold_boxes)}</td></tr>`;
         }).join('') + `<tr><td colspan="6"><b>إجمالي المبيع</b></td><td><b>${num(tot)}</b></td></tr></table>`;
     } else h += '<div class="muted">زيارة بدون جرد</div>';
     if (v.notes) h += `<div><b>ملاحظات:</b> ${esc(v.notes)}</div>`;
@@ -796,10 +848,288 @@ async function viewManage() {
   }));
 }
 
+/* ---------------- تحصيل المناديب ---------------- */
+const COLL_TITLE = 'شركة أوفق الحروف التجارية ( هنت | hint)';
+const COLL_COLS = [13, 31.875, 21.875, 15.5, 13, 17.25, 13, 13, 13, 13];   // نفس عرض أعمدة ملف Excel الأصلي
+const EXCELJS_URL = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+const money = n => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const collTotal = rows => rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+
+function setPageMargin(on) {
+  const old = document.getElementById('pgcoll'); if (old) old.remove();
+  if (!on) return;
+  const st = document.createElement('style'); st.id = 'pgcoll';
+  st.textContent = '@media print{@page{size:A4 portrait;margin:8mm}}';
+  document.head.appendChild(st);
+}
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    if (window.ExcelJS) return res();
+    const s = document.createElement('script'); s.src = src; s.onload = res;
+    s.onerror = () => rej(new Error('تعذر تحميل مكتبة Excel، تأكد من الإنترنت وجرب تاني'));
+    document.head.appendChild(s);
+  });
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const safeName = s => String(s).replace(/[\\/:*?"<>|\s]+/g, '-');
+
+/* الجدول بنفس تصميم ملف Excel الأصلي (للمعاينة والطباعة PDF) */
+function collTables(sh, rows) {
+  const cg = '<colgroup>' + [13, 29.875, 24, 15.5, 13, 17.25, 13, 13, 13, 13].map(w => `<col style="width:${(w / 165.5 * 100).toFixed(3)}%">`).join('') + '</colgroup>';
+  const top = `<table class="ct">${cg}
+    <tr><td colspan="10" class="c1">${esc(sh.title)}</td></tr>
+    <tr><td colspan="2" rowspan="3" class="crep">المندوب/ ${esc(sh.rep_name)}</td><td colspan="8" rowspan="5" class="ckind">${esc(sh.kind)}</td></tr>
+    <tr></tr><tr></tr>
+    <tr><td colspan="2" rowspan="2" class="cdate">تاريخ/ &nbsp; ${fmtDate(sh.coll_date)}</td></tr>
+    <tr></tr></table>`;
+  const amt = n => `<span dir="ltr" class="nw">${money(n)} <span dir="rtl">ر.س.</span></span>`;
+  const body = rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.store_name)}</td><td>${amt(r.amount)}</td><td colspan="2">${esc(r.invoice_no || '')}</td><td>${esc(r.pay_date || '')}</td><td colspan="2">${esc(r.voucher_no || '')}</td><td colspan="2">${esc(r.pay_type || '')}</td></tr>`).join('');
+  const data = `<table class="ct ctd">${cg}
+    <thead><tr><th rowspan="2">م</th><th rowspan="2">اسم المحل</th><th colspan="8">بيانات</th></tr>
+    <tr><th>المبلغ</th><th colspan="2">رقم الفاتورة</th><th>تاريخ</th><th colspan="2">رقم السند</th><th colspan="2">نوع السداد</th></tr></thead>
+    <tbody>${body}<tr class="ctot"><td colspan="2">الإجمالي</td><td>${amt(collTotal(rows))}</td><td colspan="7"></td></tr></tbody></table>`;
+  return top + data;
+}
+
+/* ملف Excel بنفس تنسيق الملف الأصلي: دمج الخلايا، الأعمدة، الحدود السميكة، الخط، تنسيق المبلغ والتاريخ */
+function buildCollWorkbook(EX, sh, rows) {
+  const wb = new EX.Workbook();
+  wb.creator = 'أفق'; wb.created = new Date();
+  const ws = wb.addWorksheet('ورقة1', {
+    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
+      margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } }
+  });
+  COLL_COLS.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+  const last = 8 + rows.length + 1;                       // آخر صف (الإجمالي)
+  for (let r = 1; r <= last; r++) ws.getRow(r).height = 33.95;
+
+  const TH = { style: 'thick', color: { argb: 'FF000000' } };
+  const frame = { top: TH, left: TH, bottom: TH, right: TH };
+  for (let r = 1; r <= last; r++) for (let c = 1; c <= 10; c++) {
+    const cell = ws.getCell(r, c); cell.border = frame;
+    cell.font = { name: 'Arial', bold: true, size: 16 };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  }
+  const put = (addr, v, size, align) => {
+    const c = ws.getCell(addr); c.value = v;
+    c.font = { name: 'Arial', bold: true, size: size || 16 };
+    c.alignment = { horizontal: align || 'center', vertical: 'middle', wrapText: true };
+  };
+  const dmy = fmtDate(sh.coll_date);
+
+  ws.mergeCells('A1:J1'); put('A1', sh.title, 22);
+  ws.mergeCells('A2:B4'); put('A2', 'المندوب/ ' + sh.rep_name, 16, 'right');
+  ws.mergeCells('A5:B6'); put('A5', 'تاريخ/     ' + dmy, 16);
+  ws.mergeCells('C2:J6'); put('C2', sh.kind, 20);
+  ws.mergeCells('A7:A8'); put('A7', 'م');
+  ws.mergeCells('B7:B8'); put('B7', 'اسم المحل');
+  ws.mergeCells('C7:J7'); put('C7', 'بيانات');
+  put('C8', 'المبلغ');
+  ws.mergeCells('D8:E8'); put('D8', 'رقم الفاتورة');
+  put('F8', 'تاريخ');
+  ws.mergeCells('G8:H8'); put('G8', 'رقم السند');
+  ws.mergeCells('I8:J8'); put('I8', 'نوع السداد');
+
+  const AMT = '#,##0.00\\ "ر.س.‏"';
+  const numOrText = v => { v = String(v == null ? '' : v).trim(); return /^\d+$/.test(v) ? Number(v) : (v || null); };
+  rows.forEach((r, i) => {
+    const n = 9 + i;
+    ws.mergeCells(`D${n}:E${n}`); ws.mergeCells(`G${n}:H${n}`); ws.mergeCells(`I${n}:J${n}`);
+    put('A' + n, i + 1);
+    put('B' + n, r.store_name);
+    put('C' + n, Number(r.amount || 0)); ws.getCell('C' + n).numFmt = AMT;
+    ws.getCell('C' + n).alignment = { horizontal: 'center', vertical: 'middle', shrinkToFit: true };   // يمنع ظهور #### للمبالغ الكبيرة
+    put('D' + n, numOrText(r.invoice_no));
+    if (r.pay_date) { const [y, m, d] = r.pay_date.split('-').map(Number); put('F' + n, new Date(Date.UTC(y, m - 1, d))); ws.getCell('F' + n).numFmt = 'yyyy\\-mm\\-dd;@'; }
+    put('G' + n, numOrText(r.voucher_no));
+    put('I' + n, r.pay_type || null);
+  });
+  const t = last;
+  ws.mergeCells(`A${t}:B${t}`); put('A' + t, 'الإجمالي');
+  ws.getCell('C' + t).value = { formula: rows.length ? `SUM(C9:C${t - 1})` : '0', result: collTotal(rows) };
+  ws.getCell('C' + t).numFmt = AMT;
+  ws.getCell('C' + t).alignment = { horizontal: 'center', vertical: 'middle', shrinkToFit: true };
+  ws.mergeCells(`D${t}:J${t}`);
+  ws.pageSetup.printTitlesRow = '7:8';
+  return wb;
+}
+
+/* ---- قائمة الكشوف + إنشاء كشف جديد ---- */
+async function viewColl() {
+  const { data, error } = await sb.from('hm_collections').select('*, hm_collection_rows(amount)').order('coll_date', { ascending: false }).order('id', { ascending: false }).limit(40);
+  if (error) throw error;
+  const reps = [...new Set(data.map(x => x.rep_name).filter(Boolean))];
+  let lastRep = ''; try { lastRep = localStorage.getItem('hm_rep') || ''; } catch (e) { }
+  page('تحصيل المناديب', `
+    <section class="card"><h3>كشف تحصيل جديد</h3>
+      <label class="lbl">تاريخ الكشف</label><input type="date" id="nd" value="${S.date}">
+      <label class="lbl">المندوب</label><input type="text" id="nr" list="rl" value="${esc(lastRep || reps[0] || '')}" autocomplete="off">
+      <datalist id="rl">${reps.map(r => `<option value="${esc(r)}">`).join('')}</datalist>
+      <label class="lbl">نوع التحصيل</label><input type="text" id="nk" value="تحصيل كامل">
+      <button class="btn primary" id="ncreate">إنشاء الكشف وبدء الإدخال</button>
+    </section>
+    <section class="card"><h3>الكشوف السابقة</h3>
+      ${data.length ? data.map(c => { const n = c.hm_collection_rows.length, tot = c.hm_collection_rows.reduce((a, x) => a + Number(x.amount), 0);
+        return `<a class="row crl" href="#/coll/${c.id}"><div><b>${fmtDate(c.coll_date)}</b> — ${esc(c.rep_name || 'بدون مندوب')}<div class="muted">${esc(c.kind)} · ${n} سطر</div></div><b>${money(tot)}</b></a>`; }).join('') : '<div class="muted">لا توجد كشوف بعد</div>'}
+    </section>`);
+  on('ncreate', 'click', () => guard($('ncreate'), async () => {
+    const rep = val('nr').trim(), d = val('nd');
+    if (!d) return toast('اختر التاريخ', true);
+    if (!rep) return toast('اكتب اسم المندوب', true);
+    const { data: c, error } = await sb.from('hm_collections').insert({ coll_date: d, rep_name: rep, kind: val('nk').trim() || 'تحصيل كامل', title: COLL_TITLE }).select('id').single();
+    if (error) throw error;
+    try { localStorage.setItem('hm_rep', rep); } catch (e) { }
+    location.hash = '#/coll/' + c.id;
+  }));
+}
+
+/* ---- كشف واحد: إدخال السطور + معاينة + تصدير ---- */
+async function viewCollSheet(id) {
+  id = +id;
+  const [c, r, nm] = await Promise.all([
+    sb.from('hm_collections').select('*').eq('id', id).maybeSingle(),
+    sb.from('hm_collection_rows').select('*').eq('collection_id', id).order('line_no').order('id'),
+    sb.from('hm_collection_rows').select('store_name').order('id', { ascending: false }).limit(300)
+  ]);
+  if (c.error) throw c.error; if (r.error) throw r.error;
+  if (!c.data) { toast('الكشف مش موجود', true); location.hash = '#/coll'; return; }
+  let sh = c.data, rows = r.data, editing = null;
+  const names = [...new Set(S.stores.map(s => s.name + (s.branch ? ' ' + s.branch : '')).concat((nm.data || []).map(x => x.store_name)))].filter(Boolean);
+  const nextVoucher = () => { for (let i = rows.length - 1; i >= 0; i--) { const v = String(rows[i].voucher_no || '').trim(); if (/^\d+$/.test(v)) return String(+v + 1); } return ''; };
+  const lastOf = k => { for (let i = rows.length - 1; i >= 0; i--) if (rows[i][k]) return rows[i][k]; return ''; };
+
+  const totalsHtml = () => {
+    const by = {}; rows.forEach(x => { const k = (x.pay_type || 'غير محدد').trim(); by[k] = (by[k] || 0) + Number(x.amount); });
+    return `<div class="ctotal"><span>إجمالي التحصيل</span><b>${money(collTotal(rows))}</b><small>ر.س.</small></div>
+      <div class="muted">${rows.length} سطر</div>
+      <div class="chips2">${Object.keys(by).map(k => `<span class="chip dark">${esc(k)}: ${money(by[k])}</span>`).join('')}</div>`;
+  };
+  const listHtml = () => rows.length ? rows.map((x, i) => `<div class="crow${editing === x.id ? ' editing' : ''}">
+      <div class="cno">${i + 1}</div>
+      <div class="cmain"><b>${esc(x.store_name)}</b><div class="muted">${[x.invoice_no ? 'فاتورة ' + esc(x.invoice_no) : '', esc(x.pay_date || ''), x.voucher_no ? 'سند ' + esc(x.voucher_no) : '', esc(x.pay_type || '')].filter(Boolean).join(' · ')}</div></div>
+      <div class="camt">${money(x.amount)}</div>
+      <div class="acts"><button class="btn small" data-ce="${x.id}">تعديل</button><button class="btn small danger" data-cx="${x.id}">مسح</button></div></div>`).join('') : '<div class="muted">لسه ما أضفتش سطور</div>';
+
+  const resetForm = () => {
+    editing = null;
+    $('cftitle').textContent = 'إضافة سطر رقم ' + (rows.length + 1);
+    $('cn').value = ''; $('ca').value = ''; $('ci').value = '';
+    $('cd').value = lastOf('pay_date') || sh.coll_date; $('cv').value = nextVoucher(); $('cp').value = lastOf('pay_type');
+    $('csave').textContent = 'إضافة السطر'; $('ccancel').style.display = 'none';
+  };
+  const fit = () => {
+    const w = document.querySelector('.cwrap'), c = $('cprev'); if (!w || !c) return;
+    const k = Math.min(1, (w.clientWidth - 16) / 720);
+    c.style.transform = 'scale(' + k + ')'; w.style.height = Math.ceil(c.offsetHeight * k + 16) + 'px';
+  };
+  const paintRows = () => {
+    $('clist').innerHTML = listHtml(); $('ctot').innerHTML = totalsHtml();
+    $('cprev').innerHTML = collTables(sh, rows); fit();
+  };
+  window.onresize = () => fit();
+
+  const draw = () => {
+    document.title = 'تحصيل ' + sh.rep_name + ' ' + fmtDate(sh.coll_date);
+    page('كشف التحصيل', `
+      <section class="card no-print">
+        <div class="chead"><h3>${esc(sh.kind)} — ${esc(sh.rep_name)}</h3><a class="lnk" href="#/coll">كل الكشوف</a></div>
+        <div class="muted">تاريخ الكشف: <b>${fmtDate(sh.coll_date)}</b></div>
+        <button class="btn small" id="cedit" style="margin-top:8px">تعديل بيانات الكشف</button>
+      </section>
+      <section class="card no-print"><h3 id="cftitle"></h3>
+        <label class="lbl">اسم المحل</label><input type="text" id="cn" list="cdl" autocomplete="off">
+        <datalist id="cdl">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="grid2">
+          <div><label class="lbl">المبلغ</label><input type="text" inputmode="decimal" id="ca" placeholder="0.00"></div>
+          <div><label class="lbl">نوع السداد</label><input type="text" id="cp" list="cpl" autocomplete="off"></div>
+        </div>
+        <datalist id="cpl"><option value="تحويل"><option value="شبكة"><option value="كاش"><option value="شيك"></datalist>
+        <div class="chips2" id="cpt">${['تحويل', 'شبكة', 'كاش'].map(t => `<button type="button" class="btn small" data-pt="${t}">${t}</button>`).join('')}</div>
+        <div class="grid2">
+          <div><label class="lbl">رقم الفاتورة</label><input type="text" id="ci"></div>
+          <div><label class="lbl">رقم السند</label><input type="text" id="cv"></div>
+        </div>
+        <label class="lbl">التاريخ</label><input type="date" id="cd">
+        <button class="btn primary" id="csave">إضافة السطر</button>
+        <button class="btn" id="ccancel" style="display:none">إلغاء التعديل</button>
+      </section>
+      <section class="card no-print"><h3>السطور</h3><div id="ctot"></div><div id="clist"></div></section>
+      <section class="card no-print">
+        <h3>التصدير</h3>
+        <div class="grid2"><button class="btn primary" id="cpdf" style="margin:0">PDF</button><button class="btn primary" id="cxls" style="margin:0">Excel</button></div>
+        <div class="muted" style="margin-top:6px">PDF بيفتح نافذة الطباعة: اختار "حفظ كـ PDF". وExcel بينزل ملف جاهز للتعديل.</div>
+        <button class="btn danger" id="cdel">مسح الكشف كله</button>
+      </section>
+      <div class="muted no-print" style="margin:4px 4px 6px">معاينة الجدول (نفس شكل ملف الإكسيل):</div>
+      <div class="cwrap"><div class="csheet" id="cprev"></div></div>`);
+    setPageMargin(true);
+    resetForm(); paintRows();
+
+    on('cedit', 'click', () => guard($('cedit'), async () => {
+      const v = await modal({ title: 'بيانات الكشف', fields: [
+        { label: 'عنوان الجدول', value: sh.title }, { label: 'المندوب', value: sh.rep_name }, { label: 'نوع التحصيل', value: sh.kind }, { label: 'تاريخ الكشف', value: sh.coll_date, type: 'date' }] });
+      if (!v) return; if (!v[1] || !v[3]) return toast('المندوب والتاريخ مطلوبين', true);
+      const upd = { title: v[0] || COLL_TITLE, rep_name: v[1], kind: v[2] || 'تحصيل كامل', coll_date: v[3] };
+      const { error } = await sb.from('hm_collections').update(upd).eq('id', id); if (error) throw error;
+      Object.assign(sh, upd); draw(); toast('تم الحفظ');
+    }));
+    $('cpt').onclick = e => { const b = e.target.closest('[data-pt]'); if (b) $('cp').value = b.dataset.pt; };
+    on('ccancel', 'click', () => { resetForm(); paintRows(); });
+    on('csave', 'click', () => guard($('csave'), async () => {
+      const name = val('cn').trim(), amount = toNum(val('ca'));
+      if (!name) return toast('اكتب اسم المحل', true);
+      if (!(amount > 0)) return toast('اكتب المبلغ', true);
+      const rec = { store_name: name, amount, invoice_no: val('ci').trim() || null, pay_date: val('cd') || null, voucher_no: val('cv').trim() || null, pay_type: val('cp').trim() || null };
+      if (editing) {
+        const { error } = await sb.from('hm_collection_rows').update(rec).eq('id', editing); if (error) throw error;
+        Object.assign(rows.find(x => x.id === editing), rec); toast('تم تعديل السطر');
+      } else {
+        const ln = rows.reduce((a, x) => Math.max(a, x.line_no || 0), 0) + 1;
+        const { data: ins, error } = await sb.from('hm_collection_rows').insert(Object.assign({ collection_id: id, line_no: ln }, rec)).select().single();
+        if (error) throw error; rows.push(ins); toast('تمت إضافة السطر');
+      }
+      resetForm(); paintRows(); $('cn').focus();
+    }));
+    $('clist').onclick = async e => {
+      const be = e.target.closest('[data-ce]'), bx = e.target.closest('[data-cx]');
+      if (be) {
+        const x = rows.find(y => y.id == be.dataset.ce); editing = x.id;
+        $('cftitle').textContent = 'تعديل السطر';
+        $('cn').value = x.store_name; $('ca').value = x.amount; $('ci').value = x.invoice_no || ''; $('cd').value = x.pay_date || ''; $('cv').value = x.voucher_no || ''; $('cp').value = x.pay_type || '';
+        $('csave').textContent = 'حفظ التعديل'; $('ccancel').style.display = 'block'; paintRows(); $('cn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (bx) {
+        if (!confirm('مسح السطر ده؟')) return;
+        const { error } = await sb.from('hm_collection_rows').delete().eq('id', bx.dataset.cx); if (error) return fail(error);
+        rows = rows.filter(y => y.id != bx.dataset.cx); if (editing == bx.dataset.cx) resetForm(); paintRows(); toast('تم المسح');
+      }
+    };
+    on('cpdf', 'click', () => { if (!rows.length) return toast('أضف سطور الأول', true); window.print(); });
+    on('cxls', 'click', () => guard($('cxls'), async () => {
+      if (!rows.length) return toast('أضف سطور الأول', true);
+      toast('جاري تجهيز ملف Excel...');
+      await loadScript(EXCELJS_URL);
+      const wb = buildCollWorkbook(window.ExcelJS, sh, rows);
+      const buf = await wb.xlsx.writeBuffer();
+      downloadBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `تحصيل-${safeName(sh.rep_name)}-${sh.coll_date}.xlsx`);
+      toast('تم تنزيل ملف Excel');
+    }));
+    on('cdel', 'click', () => guard($('cdel'), async () => {
+      if (!confirm('مسح الكشف بكل سطوره نهائيًا؟')) return;
+      const { error } = await sb.from('hm_collections').delete().eq('id', id); if (error) throw error;
+      toast('تم مسح الكشف'); location.hash = '#/coll';
+    }));
+  };
+  draw();
+}
+
 /* ---------------- التوجيه ---------------- */
-const routes = { home: viewHome, receive: viewReceive, dist: viewDist, visit: viewVisit, alerts: viewAlerts, report: viewReport, stock: viewStock, manage: viewManage, store: viewStore };
+const routes = { home: viewHome, receive: viewReceive, dist: viewDist, visit: viewVisit, alerts: viewAlerts, report: viewReport, stock: viewStock, manage: viewManage, store: viewStore, coll: a => a ? viewCollSheet(a) : viewColl() };
 async function route() {
   clearInterval(homeTimer); S.refreshHome = null;
+  setPageMargin(false); document.title = 'أفق - تقارير المناديب';
   if (!S.user) return viewLogin();
   if (!S.profile) return viewNoAccess();
   const [name, arg] = (location.hash.replace(/^#\/?/, '') || 'home').split('/');

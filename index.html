@@ -192,6 +192,49 @@ table.t td{padding:6px;border-bottom:1px solid #eee;vertical-align:top}
 .mdl h3{margin:0 0 6px}
 .mact{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
 .mact .btn{margin-top:0}
+
+/* ---- تحصيل المناديب ---- */
+.addp{border-top:1px dashed var(--line);margin-top:12px;padding-top:6px}
+.item.isnew{border-color:#9aa3a3;background:#f3f5f5}
+.chips2{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.ctotal{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.ctotal span{font-weight:700;color:var(--slate)}
+.ctotal b{font-size:26px;line-height:1.1}
+.ctotal small{color:var(--slate2)}
+.crow{display:grid;grid-template-columns:30px 1fr auto;gap:2px 10px;align-items:center;padding:10px 0;border-bottom:1px solid #eee}
+.crow:last-child{border-bottom:0}
+.crow.editing{background:#fff8e1;border-radius:10px;padding-inline:8px}
+.cno{width:26px;height:26px;border-radius:50%;background:var(--slate);color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.camt{font-weight:800;font-size:15px;direction:ltr}
+.crow .acts{grid-column:2 / 4;justify-content:flex-start}
+a.crl{text-decoration:none;color:inherit}
+.cwrap{direction:ltr;overflow:hidden;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:14px}
+.csheet{direction:ltr;width:720px;transform-origin:top left;color:#000;font-family:Arial,Tahoma,"Segoe UI",sans-serif}
+.nw{white-space:nowrap}
+.ct{width:100%;border-collapse:collapse;table-layout:fixed}
+.ctd{margin-top:-2px}
+.ct td,.ct th{border:2px solid #000;padding:2px 4px;text-align:center;vertical-align:middle;font-weight:700;font-size:11.5px;height:30px;unicode-bidi:plaintext;overflow-wrap:anywhere;background:#fff}
+.ct tr{height:30px}
+.ct .c1{font-size:17px;height:34px}
+.ct .crep{text-align:right;font-size:14px}
+.ct .cdate{font-size:13px}
+.ct .ckind{font-size:18px}
+.ct th{font-size:12.5px}
+.ct td span[dir]{unicode-bidi:isolate}
+
+@media print{
+  .cwrap{overflow:visible!important;border:0!important;padding:0!important;margin:0!important;background:none!important;border-radius:0!important}
+  .csheet{min-width:0!important;width:100%!important;transform:none!important}
+  .cwrap{height:auto!important}
+  .ct td,.ct th{overflow-wrap:normal}
+  .ct td,.ct th{font-size:10pt;height:7.4mm;padding:1px 3px}
+  .ct tr{height:7.4mm}
+  .ct .c1{font-size:14pt;height:9mm}
+  .ct .crep{font-size:11pt}.ct .cdate{font-size:10.5pt}.ct .ckind{font-size:14pt}.ct th{font-size:10.5pt}
+  .ct thead{display:table-header-group}
+  .ct tr{break-inside:avoid}
+  .ct td,.ct th{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
 </style>
 </head>
 <body>
